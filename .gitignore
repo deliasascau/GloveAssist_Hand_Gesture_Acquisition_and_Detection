@@ -1,0 +1,30 @@
+# Build outputs
+build/
+out/
+*.o
+*.obj
+*.elf
+*.map
+*.bin
+*.hex
+*.lst
+
+# Logs and reports
+*.log
+*.tmp
+*.cache
+
+# IDE files
+.vscode/*.log
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python caches (for scripts)
+__pycache__/
+*.pyc
+
+# Test binaries
+tests/host/unit/*.exe

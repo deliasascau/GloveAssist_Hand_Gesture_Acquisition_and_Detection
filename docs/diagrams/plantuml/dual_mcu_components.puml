@@ -1,0 +1,29 @@
+@startuml
+skinparam monochrome true
+skinparam shadowing false
+
+package "STM32F103" {
+  [Sensor Driver]
+  [Filter + Calibration]
+  [Gesture Classifier]
+  [OLED SPI DMA]
+  [Buzzer Control]
+  [UART Link]
+  [Watchdog]
+}
+
+package "ESP32" {
+  [UART Link]
+  [BLE GATT Service]
+  [Storage Service]
+  [Config Handler]
+}
+
+[Sensor Driver] --> [Filter + Calibration]
+[Filter + Calibration] --> [Gesture Classifier]
+[Gesture Classifier] --> [UART Link]
+[Config Handler] --> [Storage Service]
+[UART Link] --> [BLE GATT Service]
+[UART Link] --> [Config Handler]
+
+@enduml
