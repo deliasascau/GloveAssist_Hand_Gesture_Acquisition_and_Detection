@@ -1,0 +1,48 @@
+/*
+ * Refolosim overlay-ul de la stm32_app — acelasi pinout
+ */
+
+/* PA0-PA3: ADC1 flex sensors */
+&adc1 {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	channel@0 { reg = <0>; zephyr,gain = "ADC_GAIN_1"; zephyr,reference = "ADC_REF_INTERNAL"; zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>; zephyr,resolution = <12>; };
+	channel@1 { reg = <1>; zephyr,gain = "ADC_GAIN_1"; zephyr,reference = "ADC_REF_INTERNAL"; zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>; zephyr,resolution = <12>; };
+	channel@2 { reg = <2>; zephyr,gain = "ADC_GAIN_1"; zephyr,reference = "ADC_REF_INTERNAL"; zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>; zephyr,resolution = <12>; };
+	channel@3 { reg = <3>; zephyr,gain = "ADC_GAIN_1"; zephyr,reference = "ADC_REF_INTERNAL"; zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>; zephyr,resolution = <12>; };
+};
+
+/* USART1 PA9 TX (→ GPIO16 ESP32) / PA10 RX — consola + text ADC */
+&usart1 {
+	status = "okay";
+	current-speed = <115200>;
+	pinctrl-0 = <&usart1_tx_pa9 &usart1_rx_pa10>;
+	pinctrl-names = "default";
+};
+
+&usart3 { status = "disabled"; };
+
+&flash0 { reg = <0x08000000 0x20000>; };
+
+&pinctrl { swj-cfg = "jtag-disable"; };
+
+/ {
+	chosen {
+		zephyr,console = &usart1;
+		zephyr,shell-uart = &usart1;
+	};
+
+	aliases { led0 = &led_builtin; };
+	leds {
+		compatible = "gpio-leds";
+		led_builtin: led_0 {
+			gpios = <&gpioc 13 GPIO_ACTIVE_LOW>;
+			label = "Built-in LED PC13";
+		};
+	};
+	zephyr,user {
+		io-channels = <&adc1 0>, <&adc1 1>, <&adc1 2>, <&adc1 3>;
+	};
+};

@@ -1,0 +1,61 @@
+/*
+ * GloveAssist ESP32 Board Overlay
+ * Board: esp32_devkitc/esp32/procpu
+ *
+ * UART topology:
+ *   UART0 (GPIO1/GPIO3)   -> console / logging (CP210x USB, COM11)
+ *   UART2 (GPIO17 TX / GPIO16 RX) <- STM32 USART1 (PA9 TX -> GPIO16 RX)
+ *
+ * UART2 native pins: GPIO17=TX, GPIO16=RX, no SPI flash conflict.
+ */
+
+&pinctrl {
+	uart2_glove: uart2_glove {
+		group1 {
+			pinmux = <UART2_TX_GPIO17>;
+		};
+		group2 {
+			pinmux = <UART2_RX_GPIO16>;
+			bias-pull-up;
+		};
+	};
+};
+
+/* UART2: STM32 inter-MCU @ 115200 baud. */
+&uart2 {
+	status = "okay";
+	current-speed = <57600>;
+	pinctrl-0 = <&uart2_glove>;
+	pinctrl-names = "default";
+};
+
+/*
+ * Emergency GPIO backup channel (UART fallback).
+ *   GPIO18: ALERT_IN  <- STM32 PB0 (output)
+ *   GPIO19: ACK_OUT   -> STM32 PB1 (input)
+ */
+/ {
+	aliases {
+		alert-in = &alert_in_gpio;
+		ack-out  = &ack_out_gpio;
+	};
+
+	emergency_gpios {
+		compatible = "gpio-leds";
+
+		alert_in_gpio: alert_in_0 {
+			gpios = <&gpio0 18 GPIO_ACTIVE_HIGH>;
+			label = "Alert IN GPIO18";
+		};
+
+		ack_out_gpio: ack_out_0 {
+			gpios = <&gpio0 19 GPIO_ACTIVE_HIGH>;
+			label = "ACK OUT GPIO19";
+		};
+	};
+};
+
+/* UART1: pini default GPIO9/GPIO10 = SPI flash intern, dezactivat */
+&uart1 {
+	status = "disabled";
+};

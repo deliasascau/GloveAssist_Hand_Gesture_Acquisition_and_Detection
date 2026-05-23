@@ -1,0 +1,98 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Zephyr: Build STM32",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "$env:ZEPHYR_BASE='C:\\zephyr-workspace\\zephyr'; $env:PATH='${workspaceFolder}\\.venv\\Scripts;C:\\zephyr-workspace\\.venv\\Scripts;' + $env:PATH; C:\\zephyr-workspace\\.venv\\Scripts\\python.exe -m west build -p always -b 'stm32_min_dev@blue' '${workspaceFolder}\\application\\stm32_app' --build-dir 'C:\\zephyr-workspace\\build-glove-stm32'"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "Zephyr: Build ESP32",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "$env:ZEPHYR_BASE='C:\\zephyr-workspace\\zephyr'; $env:PATH='${workspaceFolder}\\.venv\\Scripts;C:\\zephyr-workspace\\.venv\\Scripts;' + $env:PATH; C:\\zephyr-workspace\\.venv\\Scripts\\python.exe -m west build -p always --sysbuild -b 'esp32_devkitc/esp32/procpu' '${workspaceFolder}\\application\\esp32_app' --build-dir 'C:\\zephyr-workspace\\build-glove-esp32'"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "Zephyr: Build Both",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "Zephyr: Build STM32",
+                "Zephyr: Build ESP32"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Zephyr: Flash STM32",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "$env:ZEPHYR_BASE='C:\\zephyr-workspace\\zephyr'; $env:PATH='${workspaceFolder}\\.venv\\Scripts;C:\\zephyr-workspace\\.venv\\Scripts;' + $env:PATH; C:\\zephyr-workspace\\.venv\\Scripts\\python.exe -m west flash --build-dir 'C:\\zephyr-workspace\\build-glove-stm32'"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": true,
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Zephyr: Flash ESP32",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "$env:ZEPHYR_BASE='C:\\zephyr-workspace\\zephyr'; $env:PATH='${workspaceFolder}\\.venv\\Scripts;C:\\zephyr-workspace\\.venv\\Scripts;' + $env:PATH; C:\\zephyr-workspace\\.venv\\Scripts\\python.exe -m west flash --build-dir 'C:\\zephyr-workspace\\build-glove-esp32'"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": true,
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        }
+    ]
+}

@@ -8,6 +8,11 @@ GloveAssist is a bare-metal C embedded system with dual MCU architecture:
 The project is developed from zero and follows an engineering workflow:
 requirements, features, architecture diagrams, implementation, tests, documentation, and CI/CD.
 
+## Active Codebase
+The active firmware code is in `application/`.
+
+The old `v.1.0` snapshot is archived in `docs/archive/v.1.0/` and is kept only for reference. Do not use it for current builds or feature work.
+
 ## Mandatory capability coverage
 - Wireless protocols: BLE (ESP32), UART inter-MCU link
 - Data processing: sensor filtering, calibration, gesture recognition
@@ -16,10 +21,10 @@ requirements, features, architecture diagrams, implementation, tests, documentat
 - CI/CD: source control, automated checks, unit tests pipeline
 
 ## Repository structure
-- docs: project engineering artifacts
-- firmware: MCU software split by platform
+- application: active STM32, ESP32, and common firmware code
+- docs: project engineering artifacts and archived snapshots
 - tests: host and integration test assets
-- ci: quality gates and CI support files
+- tools: local development and support tooling
 - .github/workflows: CI pipelines
 
 ## Current status
@@ -29,7 +34,7 @@ Project bootstrap completed:
 - git standards and CI pipeline initialized
 
 ## Next execution steps
-1. Freeze requirements and feature scope (v1.0 baseline)
+1. Freeze current requirements and feature scope
 2. Review diagrams with mentor and approve interfaces
 3. Implement first vertical slice: one gesture end-to-end
 4. Add unit tests for parser and gesture logic

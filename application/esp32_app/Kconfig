@@ -1,0 +1,54 @@
+# GloveAssist ESP32 - Application Kconfig
+#
+# WiFi and MQTT credentials are configured here.
+# Override in prj_wifi_mqtt.conf or via west build -DCONFIG_xxx=...
+
+config GLOVE_WIFI_SSID
+    string "WiFi network SSID"
+    default "MyNetwork"
+    help
+      SSID of the WiFi access point to connect to.
+      Only used when CONFIG_WIFI is enabled (prj_wifi_mqtt.conf).
+
+config GLOVE_WIFI_PASSWORD
+    string "WiFi network password"
+    default "password"
+    help
+      WPA2 pre-shared key for the WiFi network.
+      Only used when CONFIG_WIFI is enabled.
+
+config GLOVE_MQTT_BROKER_HOST
+    string "MQTT broker hostname"
+    default "test.mosquitto.org"
+    help
+      Hostname (or IP) of the MQTT broker.
+      Default: public Mosquitto test broker (no auth, no TLS).
+
+config GLOVE_MQTT_BROKER_PORT
+    int "MQTT broker port"
+    default 8883 if GLOVE_MQTT_TLS
+    default 1883
+    range 1 65535
+    help
+      TCP port of the MQTT broker.
+      Standard: 1883 (plain), 8883 (TLS).
+
+config GLOVE_MQTT_TLS
+    bool "Enable TLS for MQTT connection"
+    depends on MQTT_LIB_TLS
+    default n
+    help
+      Use MQTT_TRANSPORT_SECURE (TLS 1.2/1.3) instead of plain TCP.
+      Requires a CA certificate in application/esp32_app/certs/mosquitto_ca.pem.
+      Automatically sets default broker port to 8883.
+
+config GLOVE_MQTT_TLS_SEC_TAG
+    int "TLS credentials security tag for MQTT broker CA cert"
+    depends on GLOVE_MQTT_TLS
+    default 42
+    help
+      Zephyr TLS security tag used to register the broker CA certificate
+      via tls_credential_add(). Must be unique across the application.
+
+# Pull in Zephyr's Kconfig tree (REQUIRED - must be last)
+source "Kconfig.zephyr"

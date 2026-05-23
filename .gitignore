@@ -1,30 +1,147 @@
-# Build outputs
+# PlatformIO Build Artifacts
+.pio/
+.pioenvs/
+.piolibdeps/
 build/
-out/
+build-*/
+*.pyc
+
+# Secrets — never commit credentials
+application/common/include/app_secrets.h
+
+# Compiled Object Files
 *.o
 *.obj
 *.elf
-*.map
 *.bin
 *.hex
+*.map
 *.lst
 
-# Logs and reports
-*.log
-*.tmp
-*.cache
+# Linker Output
+*.ilk
+*.exp
+*.gch
+*.pch
+*.lib
+*.a
+*.la
+*.lo
 
-# IDE files
-.vscode/*.log
-.idea/
+# VS Code Settings (keep shared settings, ignore local)
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+.vscode/.browse.c_cpp.db*
+.vscode/c_cpp_properties.json
+.vscode/ipch
 
-# OS files
-.DS_Store
-Thumbs.db
+# STM32CubeIDE / Eclipse
+.metadata/
+.project
+.cproject
+.settings/
+Debug/
+Release/
 
-# Python caches (for scripts)
+# Keil MDK-ARM
+*.uvopt
+*.uvoptx
+*.uvproj
+*.uvprojx
+*.bak
+
+# IAR EWARM
+*.eww
+*.ewd
+*.ewp
+*.dep
+*.dnx
+
+# Python Virtual Environment (pentru TinyML training scripts)
+.venv/
+venv/
+env/
+ENV/
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
 
-# Test binaries
-tests/host/unit/*.exe
+# Jupyter Notebooks Checkpoints (TinyML dataset analysis)
+.ipynb_checkpoints/
+*.ipynb
+
+# TensorFlow Model Cache
+*.tflite
+*.pb
+saved_model/
+training_checkpoints/
+
+# MacOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+
+# Temporary Files
+*.tmp
+*.temp
+*.log
+*.swp
+*.swo
+*~
+
+# Test Results
+test_results/
+coverage/
+*.gcov
+*.gcda
+*.gcno
+
+# Documentation Generated Files (dacă folosim Doxygen)
+docs/html/
+docs/latex/
+docs/xml/
+
+# Node Modules (dacă avem web dashboard pentru visualizare)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Dataset Raw (versiuni mari, se ține doar processed)
+datasets/raw/*.csv
+datasets/raw/*.bin
+
+# Backup Files
+*.bak
+*.backup
+*.old
+
+# Large local/reference documents kept outside normal source review.
+# Curated docs may still live under docs/.
+*.docx
+*.pdf
+!docs/**/*.pdf
+!docs/**/*.docx
+
+# IDE Specific
+*.sublime-project
+*.sublime-workspace
+.idea/
+*.iml
+
+# AI assistant session data
+.claude/
+.copilot/

@@ -1,0 +1,7 @@
+/*
+ * STM32F103 keeps PB4 assigned to NJTRST unless JTAG is disabled.
+ * SWD remains active on PA13/PA14 for ST-Link flashing/debugging.
+ */
+&pinctrl {
+	swj-cfg = "jtag-disable";
+};

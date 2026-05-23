@@ -1,0 +1,22 @@
+/*
+ * stm32_min_dev_blue.overlay - Blue Pill variant specifics
+ *
+ * Adds NVS flash storage partition (last 2 KB of 128 KB flash).
+ * Used from Phase 8 onwards for calibration data persistence.
+ */
+
+&flash0 {
+	reg = <0x08000000 0x20000>;
+
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		/* 2 x 1 KB pages at 0x0801F800-0x0801FFFF */
+		storage_partition: partition@1f800 {
+			label = "storage";
+			reg = <0x0001f800 0x00000800>;
+		};
+	};
+};

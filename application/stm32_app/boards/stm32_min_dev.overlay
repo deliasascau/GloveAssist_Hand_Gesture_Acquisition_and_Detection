@@ -1,0 +1,185 @@
+/*
+ * GloveAssist STM32 Board Overlay
+ * Board: stm32_min_dev (STM32F103C8 "Blue Pill")
+ *
+ * Phase 1 active:
+ *   PA0-PA3:  ADC1 channels 0-3 (4 flex sensors)
+ *   PA9/PA10: USART1 TX/RX <-> ESP32 UART2 GPIO16/GPIO17
+ *   PC13:     Built-in LED (active low)
+ * Phase 4 active:
+ *   PB10/PB11: I2C2 SCL/SDA -> SSD1306 OLED 128x64 (0x3C)
+ * Phase 5 active:
+ *   PB4:  Buzzer (GPIO active-high)
+ *   PB6:  Motor vibratii (TIM4_CH1 PWM)
+ */
+
+/* Keep Phase 1 tight: only ADC1, USART1, GPIO LED are active. */
+&usart2 {
+	status = "disabled";
+};
+
+&usart3 {
+	status = "disabled";
+};
+
+&i2c1 {
+	status = "disabled";
+};
+
+/* Phase 4: I2C2 for SSD1306 OLED on PB10(SCL)/PB11(SDA) */
+&i2c2 {
+	status = "okay";
+	pinctrl-0 = <&i2c2_scl_pb10 &i2c2_sda_pb11>;
+	pinctrl-names = "default";
+	clock-frequency = <I2C_BITRATE_STANDARD>;
+
+	ssd1306: ssd1306@3c {
+		compatible = "solomon,ssd1306";
+		reg = <0x3c>;
+		width = <128>;
+		height = <64>;
+		segment-offset = <0>;
+		page-offset = <0>;
+		display-offset = <0>;
+		multiplex-ratio = <63>;
+		prechargep = <0x22>;
+	};
+};
+
+&spi1 {
+	status = "disabled";
+};
+
+&spi2 {
+	status = "disabled";
+};
+
+&usb {
+	status = "disabled";
+};
+
+&timers1 {
+	status = "disabled";
+};
+
+/* Phase 5: TIM4 CH1 for motor vibratii PWM on PB6
+ * Prescaler 7 → TIM4 runs at 8 MHz / 8 = 1 MHz.
+ * period_ns = 1 000 000 → ARR = 999 → 1 kHz PWM with 1000-step resolution.
+ * (Old value 7999 gave 1 kHz tick → ARR = 0 → duty always 0 → motor dead) */
+&timers4 {
+	status = "okay";
+	st,prescaler = <7>;  /* 8MHz / 8 = 1 MHz tick → 1 kHz PWM w/ 1000 steps */
+
+	pwm4: pwm {
+		status = "okay";
+		pinctrl-0 = <&tim4_ch1_pwm_out_pb6>;
+		pinctrl-names = "default";
+		#pwm-cells = <3>;
+	};
+};
+
+/* Most STM32F103C8 Blue Pill boards expose 128 KB flash in practice. */
+&flash0 {
+	reg = <0x08000000 0x20000>;
+};
+
+/* Keep SWD for flashing/debugging, release JTAG pins. */
+&pinctrl {
+	swj-cfg = "jtag-disable";
+};
+
+/*
+ * Many Blue Pill clones (AliExpress STM32F103C8T6) have no HSE crystal
+ * populated (Y1 pads empty).  The Zephyr clock driver waits forever for
+ * HSERDY, blocking all peripheral init.
+ *
+ * Fix: disable HSE and PLL, run the system on the internal HSI RC at 8 MHz.
+ * USART1 BRR = 8 000 000 / 115 200 = 69 -> baud error < 0.4 % (fine).
+ */
+&clk_hse {
+	status = "disabled";
+};
+
+&pll {
+	status = "disabled";
+};
+
+&rcc {
+	clocks = <&clk_hsi>;
+	clock-frequency = <DT_FREQ_M(8)>;
+	apb1-prescaler = <1>;
+	apb2-prescaler = <1>;
+};
+
+/ {
+	aliases {
+		led0    = &led_builtin;
+		buzzer0 = &buzzer_gpio;
+		pwm-mot = &motor_pwm;  /* must point to pwm consumer, not controller */
+		alert-out = &alert_out_gpio;  /* PB0 -> ESP32 GPIO18 */
+		alert-in  = &alert_in_gpio;   /* PB1 <- ESP32 GPIO19 */
+	};
+
+	leds {
+		compatible = "gpio-leds";
+
+		led_builtin: led_0 {
+			gpios = <&gpioc 13 GPIO_ACTIVE_LOW>;
+			label = "Built-in LED PC13";
+		};
+	};
+
+	/* Phase 5: Buzzer on PB4 (active-high, GPIO on/off for simple beep) */
+	buzzer_gpios {
+		compatible = "gpio-leds";
+
+		buzzer_gpio: buzzer_0 {
+			gpios = <&gpiob 4 GPIO_ACTIVE_HIGH>;
+			label = "Buzzer PB4";
+		};
+	};
+
+	/* PWM consumer node: TIM4_CH1 (PB6) for motor vibration */
+	motor_vibration {
+		compatible = "pwm-leds";
+		motor_pwm: motor_0 {
+			/* channel 1 = TIM4_CH1 (Zephyr pwm_stm32 uses 1-indexed channels 1-4)
+			 * period = 1 000 000 ns = 1 ms = 1 kHz, normal polarity */
+			pwms = <&pwm4 1 1000000 0>;
+		};
+	};
+
+	/* Emergency GPIO backup channel (UART fallback) */
+	alert_gpios {
+		compatible = "gpio-leds";
+
+		/* PB0: ALERT output -> ESP32 GPIO18 */
+		alert_out_gpio: alert_out_0 {
+			gpios = <&gpiob 0 GPIO_ACTIVE_HIGH>;
+			label = "Alert OUT PB0";
+		};
+
+		/* PB1: ACK input <- ESP32 GPIO19 */
+		alert_in_gpio: alert_in_0 {
+			gpios = <&gpiob 1 GPIO_ACTIVE_HIGH>;
+			label = "Alert ACK IN PB1";
+		};
+	};
+};
+
+/*
+ * ADC1 is owned exclusively by the application via direct register writes
+ * (DMA1 Channel1, circular mode).  Disabling the Zephyr ADC driver node
+ * prevents any driver conflict.  PA0-PA3 are configured as analog inputs
+ * at runtime by clearing GPIOA->CRL bits [15:0].
+ */
+&adc1 {
+	status = "disabled";
+};
+
+&usart1 {
+	status = "okay";
+	current-speed = <57600>;
+	pinctrl-0 = <&usart1_tx_pa9 &usart1_rx_pa10>;
+	pinctrl-names = "default";
+};

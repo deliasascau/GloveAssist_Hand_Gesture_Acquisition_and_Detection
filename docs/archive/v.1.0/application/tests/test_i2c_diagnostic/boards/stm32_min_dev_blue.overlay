@@ -1,0 +1,8 @@
+/* Diagnostic I2C2 - SLOW MODE (10kHz) */
+
+&i2c2 {
+	status = "okay";
+	pinctrl-0 = <&i2c2_scl_pb10 &i2c2_sda_pb11>;
+	pinctrl-names = "default";
+	clock-frequency = <10000>;  /* 10kHz - FOARTE LENT */
+};
