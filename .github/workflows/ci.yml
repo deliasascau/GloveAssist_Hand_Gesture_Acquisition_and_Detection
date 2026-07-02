@@ -11,12 +11,27 @@ jobs:
 
   build-stm32:
     name: "Build STM32"
-    runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/zephyrproject-rtos/ci:v0.26.9
+    runs-on: ubuntu-latest        # fara container Docker
     steps:
       - uses: actions/checkout@v4
-      - run: bash scripts/build_stm32.sh
+
+      - name: Install west + ARM toolchain
+        run: |
+          pip3 install west
+          sudo apt-get install -y gcc-arm-none-eabi cmake ninja-build
+
+      - name: West init & update
+        run: |
+          west init -l .
+          west update --narrow -o=--depth=1
+
+      - name: Build STM32
+        run: |
+          west build -p always \
+            -b stm32_min_dev@blue \
+            application/stm32_app \
+            --build-dir build-stm32
+
       - uses: actions/upload-artifact@v4
         with:
           name: stm32-firmware
@@ -25,11 +40,41 @@ jobs:
   build-esp32:
     name: "Build ESP32"
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/zephyrproject-rtos/ci:v0.26.9
     steps:
       - uses: actions/checkout@v4
-      - run: bash scripts/build_esp32.sh
+
+      - name: Free disk space (ESP32 SDK e mare)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android \
+            /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
+          df -h
+
+      - name: Install west + Xtensa toolchain
+        run: |
+          pip3 install west
+          sudo apt-get install -y cmake ninja-build python3-pip
+
+      - name: West init & update
+        run: |
+          west init -l .
+          west update --narrow -o=--depth=1
+
+      - name: Install Zephyr SDK (Xtensa for ESP32)
+        run: |
+          cd /opt
+          SDK=zephyr-sdk-0.16.8
+          wget -q https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v0.16.8/${SDK}_linux-x86_64_minimal.tar.xz
+          tar xf ${SDK}_linux-x86_64_minimal.tar.xz
+          cd ${SDK} && ./setup.sh -t xtensa-espressif_esp32_zephyr-elf -h -c
+
+      - name: Build ESP32
+        run: |
+          export ZEPHYR_SDK_INSTALL_DIR=/opt/zephyr-sdk-0.16.8
+          west build -p always \
+            -b esp32_devkitc/esp32/procpu \
+            application/esp32_app \
+            --build-dir build-esp32
+
       - uses: actions/upload-artifact@v4
         with:
           name: esp32-firmware
@@ -38,11 +83,23 @@ jobs:
   unit-tests:
     name: "Unit Tests"
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/zephyrproject-rtos/ci:v0.26.9
     steps:
       - uses: actions/checkout@v4
-      - run: bash scripts/run_tests.sh
+
+      - name: Install west + native_sim deps
+        run: |
+          pip3 install west
+          sudo apt-get install -y cmake ninja-build gcc
+
+      - name: West init & update
+        run: |
+          west init -l .
+          west update --narrow -o=--depth=1
+
+      - name: Build + Run tests (native_sim)
+        run: |
+          west build -p always -b native_sim tests --build-dir build-tests
+          ./build-tests/zephyr/zephyr.exe
 
   ci-gate:
     name: "CI Gate"
@@ -51,9 +108,6 @@ jobs:
     steps:
       - run: echo "Toate job-urile CI au trecut OK"
 
-  # ── Flash STM32 pe PC-ul tău (self-hosted runner Windows) ──────────────────
-  # Rulează DOAR la push pe main, nu la PR și nu la tag
-  # Necesită: runner Windows activ + ST-Link conectat USB
   flash-stm32:
     name: "Flash STM32"
     runs-on: [self-hosted, Windows, x64]
