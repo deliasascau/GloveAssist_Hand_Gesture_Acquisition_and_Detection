@@ -154,7 +154,23 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run STM32 flash script
         shell: cmd
-        run: powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts\flash_stm32.ps1
+        run: |
+          powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts\flash_stm32.ps1 > "%RUNNER_TEMP%\flash-stm32.log" 2>&1
+          set FLASH_EXIT=%ERRORLEVEL%
+          type "%RUNNER_TEMP%\flash-stm32.log"
+          exit /b %FLASH_EXIT%
+      - name: Upload STM32 flash logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flash-stm32-logs
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}\flash-stm32.log
+            ${{ runner.temp }}\gloveassist-${{ github.run_id }}-${{ github.run_attempt }}-stm32\CMakeCache.txt
+            ${{ runner.temp }}\gloveassist-${{ github.run_id }}-${{ github.run_attempt }}-stm32\CMakeFiles\CMakeError.log
+            ${{ runner.temp }}\gloveassist-${{ github.run_id }}-${{ github.run_attempt }}-stm32\CMakeFiles\CMakeOutput.log
+            ${{ runner.temp }}\gloveassist-${{ github.run_id }}-${{ github.run_attempt }}-stm32\CMakeFiles\CMakeConfigureLog.yaml
 
   flash-esp32:
     name: "Flash ESP32"
@@ -165,7 +181,23 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run ESP32 flash script
         shell: cmd
-        run: powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts\flash_esp32.ps1
+        run: |
+          powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts\flash_esp32.ps1 > "%RUNNER_TEMP%\flash-esp32.log" 2>&1
+          set FLASH_EXIT=%ERRORLEVEL%
+          type "%RUNNER_TEMP%\flash-esp32.log"
+          exit /b %FLASH_EXIT%
+      - name: Upload ESP32 flash logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flash-esp32-logs
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}\flash-esp32.log
+            ${{ runner.temp }}\gloveassist-${{ github.run_id }}-${{ github.run_attempt }}-esp32\CMakeCache.txt
+            ${{ runner.temp }}\gloveassist-${{ github.run_id }}-${{ github.run_attempt }}-esp32\CMakeFiles\CMakeError.log
+            ${{ runner.temp }}\gloveassist-${{ github.run_id }}-${{ github.run_attempt }}-esp32\CMakeFiles\CMakeOutput.log
+            ${{ runner.temp }}\gloveassist-${{ github.run_id }}-${{ github.run_attempt }}-esp32\CMakeFiles\CMakeConfigureLog.yaml
 
   release:
     name: "Release ${{ github.ref_name }}"
