@@ -64,8 +64,14 @@ function Invoke-Checked {
 
     Write-Host $Label
     Write-Host ("> {0} {1}" -f $FilePath, ($Arguments -join ' '))
-    $Output = & $FilePath @Arguments 2>&1
-    $ExitCode = $LASTEXITCODE
+    $PreviousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $Output = & $FilePath @Arguments 2>&1
+        $ExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $PreviousErrorActionPreference
+    }
     $Output | ForEach-Object { Write-Host $_ }
 
     if ($ExitCode -ne 0) {
