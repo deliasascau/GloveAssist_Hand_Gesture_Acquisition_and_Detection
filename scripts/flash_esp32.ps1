@@ -5,6 +5,9 @@ $ErrorActionPreference = 'Stop'
 
 $env:ZEPHYR_BASE = 'C:\zephyr-workspace\zephyr'
 $env:PATH = 'C:\zephyr-workspace\.venv\Scripts;' + $env:PATH
+$env:GIT_CONFIG_COUNT = '1'
+$env:GIT_CONFIG_KEY_0 = 'safe.directory'
+$env:GIT_CONFIG_VALUE_0 = '*'
 
 $python = 'C:\zephyr-workspace\.venv\Scripts\python.exe'
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -29,6 +32,26 @@ Write-Host "App dir: $AppDir"
 Write-Host "Build dir: $BuildDir"
 Write-Host "Zephyr base: $env:ZEPHYR_BASE"
 Write-Host "Board: $Board"
+Write-Host "Git safe.directory: process-local wildcard"
+
+function Show-BuildDiagnostics {
+    if (-not (Test-Path $BuildDir)) {
+        return
+    }
+
+    $LogFiles = @(
+        (Join-Path $BuildDir 'CMakeFiles\CMakeError.log'),
+        (Join-Path $BuildDir 'CMakeFiles\CMakeOutput.log'),
+        (Join-Path $BuildDir 'CMakeFiles\CMakeConfigureLog.yaml')
+    )
+
+    foreach ($LogFile in $LogFiles) {
+        if (Test-Path $LogFile) {
+            Write-Host "----- $LogFile -----"
+            Get-Content -LiteralPath $LogFile -Tail 120
+        }
+    }
+}
 
 function Invoke-Checked {
     param(
@@ -44,12 +67,15 @@ function Invoke-Checked {
     Write-Host ("> {0} {1}" -f $FilePath, ($Arguments -join ' '))
     & $FilePath @Arguments
     if ($LASTEXITCODE -ne 0) {
+        Show-BuildDiagnostics
         throw "$Label failed with exit code $LASTEXITCODE"
     }
 }
 
 Invoke-Checked "Building ESP32..." $python @(
-    '-m', 'west', 'build',
+    '-m', 'west',
+    '-z', $env:ZEPHYR_BASE,
+    'build',
     '-p', 'always',
     '-b', $Board,
     $AppDir,
@@ -57,7 +83,9 @@ Invoke-Checked "Building ESP32..." $python @(
 )
 
 Invoke-Checked "Flashing ESP32..." $python @(
-    '-m', 'west', 'flash',
+    '-m', 'west',
+    '-z', $env:ZEPHYR_BASE,
+    'flash',
     '--build-dir', $BuildDir
 )
 Write-Host "ESP32 flash OK"
