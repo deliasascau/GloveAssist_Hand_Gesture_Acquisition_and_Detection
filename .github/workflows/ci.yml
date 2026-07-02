@@ -152,7 +152,9 @@ jobs:
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
-      - run: powershell -ExecutionPolicy Bypass -File scripts\flash_stm32.ps1
+      - name: Run STM32 flash script
+        shell: cmd
+        run: powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts\flash_stm32.ps1
 
   flash-esp32:
     name: "Flash ESP32"
@@ -161,7 +163,9 @@ jobs:
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
-      - run: powershell -ExecutionPolicy Bypass -File scripts\flash_esp32.ps1
+      - name: Run ESP32 flash script
+        shell: cmd
+        run: powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts\flash_esp32.ps1
 
   release:
     name: "Release ${{ github.ref_name }}"
