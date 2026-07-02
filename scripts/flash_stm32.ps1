@@ -7,7 +7,21 @@ $env:ZEPHYR_BASE = 'C:\zephyr-workspace\zephyr'
 $env:PATH = 'C:\zephyr-workspace\.venv\Scripts;' + $env:PATH
 
 $python = 'C:\zephyr-workspace\.venv\Scripts\python.exe'
-$BuildDir = 'C:\zephyr-workspace\build-glove-stm32'
+$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$AppDir = Join-Path $RepoRoot 'application\stm32_app'
+
+if ($env:RUNNER_TEMP) {
+    $RunId = if ($env:GITHUB_RUN_ID) { $env:GITHUB_RUN_ID } else { 'local' }
+    $RunAttempt = if ($env:GITHUB_RUN_ATTEMPT) { $env:GITHUB_RUN_ATTEMPT } else { '0' }
+    $BuildDir = Join-Path $env:RUNNER_TEMP "gloveassist-$RunId-$RunAttempt-stm32"
+} else {
+    $BuildDir = 'C:\zephyr-workspace\build-glove-stm32'
+}
+
+Write-Host "Repo root: $RepoRoot"
+Write-Host "App dir: $AppDir"
+Write-Host "Build dir: $BuildDir"
+Write-Host "Zephyr base: $env:ZEPHYR_BASE"
 
 function Invoke-Checked {
     param(
@@ -20,6 +34,7 @@ function Invoke-Checked {
     )
 
     Write-Host $Label
+    Write-Host ("> {0} {1}" -f $FilePath, ($Arguments -join ' '))
     & $FilePath @Arguments
     if ($LASTEXITCODE -ne 0) {
         throw "$Label failed with exit code $LASTEXITCODE"
@@ -30,7 +45,7 @@ Invoke-Checked "Building STM32..." $python @(
     '-m', 'west', 'build',
     '-p', 'always',
     '-b', 'stm32_min_dev@blue',
-    'application/stm32_app',
+    $AppDir,
     '--build-dir', $BuildDir
 )
 
