@@ -46,11 +46,11 @@ LOG_MODULE_REGISTER(wifi_mqtt, LOG_LEVEL_INF);
 #include <inttypes.h>
 #include <time.h>
 
-#ifndef ZEPHYR_VERSION_MAJOR
-#define ZEPHYR_VERSION_MAJOR 3
+#ifndef KERNEL_VERSION_MAJOR
+#define KERNEL_VERSION_MAJOR 3
 #endif
 
-#if ZEPHYR_VERSION_MAJOR >= 4
+#if KERNEL_VERSION_MAJOR >= 4
 #define GLOVE_ZEPHYR4_NET 1
 typedef uint64_t glove_net_mgmt_event_t;
 #else

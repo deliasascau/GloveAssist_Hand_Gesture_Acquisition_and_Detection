@@ -14,12 +14,15 @@
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/settings/settings.h>
+#include <zephyr/version.h>
 #include "frame_protocol.h"
 #include "gesture.h"
 #include "wifi_mqtt.h"
 
-#ifndef BT_LE_ADV_OPT_CONN
-#define BT_LE_ADV_OPT_CONN BT_LE_ADV_OPT_CONNECTABLE
+#if KERNEL_VERSION_MAJOR >= 4
+#define GLOVE_BT_LE_ADV_OPT_CONN BT_LE_ADV_OPT_CONN
+#else
+#define GLOVE_BT_LE_ADV_OPT_CONN BT_LE_ADV_OPT_CONNECTABLE
 #endif
 
 LOG_MODULE_REGISTER(ble_adc, LOG_LEVEL_INF);
@@ -158,7 +161,7 @@ static const struct bt_data sd[] = {
 #define BLE_ADV_INTERVAL_MAX 0x0640U
 
 static const struct bt_le_adv_param s_adv_param =
-    BT_LE_ADV_PARAM_INIT(BT_LE_ADV_OPT_CONN,
+    BT_LE_ADV_PARAM_INIT(GLOVE_BT_LE_ADV_OPT_CONN,
                          BLE_ADV_INTERVAL_MIN,
                          BLE_ADV_INTERVAL_MAX,
                          NULL);
