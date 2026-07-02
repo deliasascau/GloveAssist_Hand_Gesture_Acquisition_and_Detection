@@ -7,7 +7,6 @@ on:
   pull_request:
     branches: [main]
 
-# Variabile comune reutilizate in toate job-urile
 env:
   SDK_VER: "0.16.8"
   SDK_DIR: "/opt/zephyr-sdk-0.16.8"
@@ -20,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install west + ARM toolchain apt
+      - name: Install west + ARM toolchain
         run: |
           pip3 install west
           sudo apt-get install -y gcc-arm-none-eabi cmake ninja-build
@@ -29,9 +28,11 @@ jobs:
         run: |
           west init -l .
           west update --narrow -o=--depth=1
+          echo "ZEPHYR_BASE=$(west topdir)/zephyr" >> $GITHUB_ENV
+          echo "APP_DIR=$(pwd)" >> $GITHUB_ENV
 
       - name: Install Zephyr Python requirements
-        run: pip3 install -r zephyr/scripts/requirements.txt
+        run: pip3 install -r $ZEPHYR_BASE/scripts/requirements.txt
 
       - name: Install Zephyr SDK (ARM only)
         run: |
@@ -42,7 +43,7 @@ jobs:
       - name: Build STM32
         run: |
           export ZEPHYR_SDK_INSTALL_DIR=${SDK_DIR}
-          west build -p always -b stm32_min_dev@blue application/stm32_app --build-dir build-stm32
+          west build -p always -b stm32_min_dev@blue $APP_DIR/application/stm32_app --build-dir $APP_DIR/build-stm32
 
       - uses: actions/upload-artifact@v4
         with:
@@ -70,9 +71,11 @@ jobs:
         run: |
           west init -l .
           west update --narrow -o=--depth=1
+          echo "ZEPHYR_BASE=$(west topdir)/zephyr" >> $GITHUB_ENV
+          echo "APP_DIR=$(pwd)" >> $GITHUB_ENV
 
       - name: Install Zephyr Python requirements
-        run: pip3 install -r zephyr/scripts/requirements.txt
+        run: pip3 install -r $ZEPHYR_BASE/scripts/requirements.txt
 
       - name: Install Zephyr SDK (Xtensa ESP32)
         run: |
@@ -83,7 +86,7 @@ jobs:
       - name: Build ESP32
         run: |
           export ZEPHYR_SDK_INSTALL_DIR=${SDK_DIR}
-          west build -p always -b esp32_devkitc/esp32/procpu application/esp32_app --build-dir build-esp32
+          west build -p always -b esp32_devkitc/esp32/procpu $APP_DIR/application/esp32_app --build-dir $APP_DIR/build-esp32
 
       - uses: actions/upload-artifact@v4
         with:
@@ -105,9 +108,11 @@ jobs:
         run: |
           west init -l .
           west update --narrow -o=--depth=1
+          echo "ZEPHYR_BASE=$(west topdir)/zephyr" >> $GITHUB_ENV
+          echo "APP_DIR=$(pwd)" >> $GITHUB_ENV
 
       - name: Install Zephyr Python requirements
-        run: pip3 install -r zephyr/scripts/requirements.txt
+        run: pip3 install -r $ZEPHYR_BASE/scripts/requirements.txt
 
       - name: Install Zephyr SDK (host tools)
         run: |
@@ -118,8 +123,8 @@ jobs:
       - name: Build + Run tests
         run: |
           export ZEPHYR_SDK_INSTALL_DIR=${SDK_DIR}
-          west build -p always -b native_sim tests --build-dir build-tests
-          ./build-tests/zephyr/zephyr.exe
+          west build -p always -b native_sim $APP_DIR/tests --build-dir $APP_DIR/build-tests
+          $APP_DIR/build-tests/zephyr/zephyr.exe
 
   ci-gate:
     name: "CI Gate"
