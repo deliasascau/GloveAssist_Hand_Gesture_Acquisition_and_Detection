@@ -1,6 +1,6 @@
 /*
  * GloveAssist ESP32 Board Overlay
- * Board: esp32_devkitc/esp32/procpu
+ * Board: esp32_devkitc/esp32/procpu (newer Zephyr local workspaces)
  *
  * UART topology:
  *   UART0 (GPIO1/GPIO3)   -> console / logging (CP210x USB, COM11)

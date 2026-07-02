@@ -2,7 +2,7 @@
  * Ztest unit tests for the transport-agnostic frame protocol.
  *
  * Build target:
- *   west build -b native_sim tests/
+ *   west build -b native_sim/native/64 tests/
  */
 
 #include <zephyr/ztest.h>

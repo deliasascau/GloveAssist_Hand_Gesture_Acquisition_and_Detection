@@ -4,7 +4,7 @@
 # Tests cover transport-agnostic modules only (no hardware drivers):
 #   - frame_protocol.c : frame_build(), frame_build_hmac(), frame_validate_hmac()
 #
-# Build: west build -b native_sim tests/
+# Build: west build -b native_sim/native/64 tests/
 
 cmake_minimum_required(VERSION 3.20.0)
 

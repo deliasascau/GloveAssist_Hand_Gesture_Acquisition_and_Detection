@@ -34,7 +34,7 @@
 	clock-frequency = <I2C_BITRATE_STANDARD>;
 
 	ssd1306: ssd1306@3c {
-		compatible = "solomon,ssd1306";
+		compatible = "solomon,ssd1306fb", "solomon,ssd1306";
 		reg = <0x3c>;
 		width = <128>;
 		height = <64>;

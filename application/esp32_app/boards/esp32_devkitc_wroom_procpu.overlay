@@ -1,0 +1,8 @@
+/*
+ * Zephyr 3.7 board name for ESP32 DevKitC WROOM.
+ *
+ * Keep the pin mapping in one place; newer local workspaces may still pick up
+ * esp32_devkitc_procpu.overlay automatically.
+ */
+
+#include "esp32_devkitc_procpu.overlay"

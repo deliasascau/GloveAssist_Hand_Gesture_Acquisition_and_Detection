@@ -19,10 +19,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install west + ARM toolchain
+      - name: Install west + Zephyr host deps + ARM toolchain
         run: |
           pip3 install west
-          sudo apt-get install -y gcc-arm-none-eabi cmake ninja-build
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build gperf ccache dfu-util device-tree-compiler \
+            wget xz-utils file make gcc-arm-none-eabi
 
       - name: West init & update
         run: |
@@ -62,10 +65,13 @@ jobs:
           sudo rm -rf /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
           df -h
 
-      - name: Install west
+      - name: Install west + Zephyr host deps
         run: |
           pip3 install west
-          sudo apt-get install -y cmake ninja-build
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build gperf ccache dfu-util device-tree-compiler \
+            wget xz-utils file make
 
       - name: West init & update
         run: |
@@ -86,7 +92,7 @@ jobs:
       - name: Build ESP32
         run: |
           export ZEPHYR_SDK_INSTALL_DIR=${SDK_DIR}
-          west build -p always -b esp32_devkitc/esp32/procpu $APP_DIR/application/esp32_app --build-dir $APP_DIR/build-esp32
+          west build -p always -b esp32_devkitc_wroom/esp32/procpu $APP_DIR/application/esp32_app --build-dir $APP_DIR/build-esp32
 
       - uses: actions/upload-artifact@v4
         with:
@@ -99,10 +105,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install west + GCC host
+      - name: Install west + Zephyr host deps + GCC host
         run: |
           pip3 install west
-          sudo apt-get install -y cmake ninja-build gcc
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build gperf ccache dfu-util device-tree-compiler \
+            wget xz-utils file make gcc g++
 
       - name: West init & update
         run: |
@@ -123,7 +132,7 @@ jobs:
       - name: Build + Run tests
         run: |
           export ZEPHYR_SDK_INSTALL_DIR=${SDK_DIR}
-          west build -p always -b native_sim $APP_DIR/tests --build-dir $APP_DIR/build-tests
+          west build -p always -b native_sim/native/64 $APP_DIR/tests --build-dir $APP_DIR/build-tests
           $APP_DIR/build-tests/zephyr/zephyr.exe
 
   ci-gate:
