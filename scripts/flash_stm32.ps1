@@ -58,15 +58,25 @@ function Invoke-Checked {
         [Parameter(Mandatory = $true)]
         [string]$FilePath,
         [Parameter(Mandatory = $true)]
-        [string[]]$Arguments
+        [string[]]$Arguments,
+        [switch]$AcceptOpenOcdWriteSuccess
     )
 
     Write-Host $Label
     Write-Host ("> {0} {1}" -f $FilePath, ($Arguments -join ' '))
-    & $FilePath @Arguments
-    if ($LASTEXITCODE -ne 0) {
+    $Output = & $FilePath @Arguments 2>&1
+    $ExitCode = $LASTEXITCODE
+    $Output | ForEach-Object { Write-Host $_ }
+
+    if ($ExitCode -ne 0) {
+        $OutputText = $Output -join "`n"
+        if ($AcceptOpenOcdWriteSuccess -and $OutputText -match 'wrote\s+\d+\s+bytes\s+from file') {
+            Write-Host "$Label wrote the image; ignoring OpenOCD reset/shutdown exit code $ExitCode"
+            return
+        }
+
         Show-BuildDiagnostics
-        throw "$Label failed with exit code $LASTEXITCODE"
+        throw "$Label failed with exit code $ExitCode"
     }
 }
 
@@ -85,5 +95,5 @@ Invoke-Checked "Flashing STM32..." $python @(
     '-z', $env:ZEPHYR_BASE,
     'flash',
     '--build-dir', $BuildDir
-)
+) -AcceptOpenOcdWriteSuccess
 Write-Host "STM32 flash OK"
