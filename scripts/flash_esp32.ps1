@@ -3,7 +3,11 @@
 
 $ErrorActionPreference = 'Stop'
 
+$SdkDir = 'C:\zephyr-sdk-1.0.1'
 $env:ZEPHYR_BASE = 'C:\zephyr-workspace\zephyr'
+$env:ZEPHYR_SDK_INSTALL_DIR = $SdkDir
+$env:ZEPHYR_TOOLCHAIN_VARIANT = 'zephyr'
+$env:CMAKE_PREFIX_PATH = if ($env:CMAKE_PREFIX_PATH) { "$SdkDir;$env:CMAKE_PREFIX_PATH" } else { $SdkDir }
 $env:PATH = 'C:\zephyr-workspace\.venv\Scripts;' + $env:PATH
 $env:GIT_CONFIG_COUNT = '1'
 $env:GIT_CONFIG_KEY_0 = 'safe.directory'
@@ -31,6 +35,7 @@ Write-Host "Repo root: $RepoRoot"
 Write-Host "App dir: $AppDir"
 Write-Host "Build dir: $BuildDir"
 Write-Host "Zephyr base: $env:ZEPHYR_BASE"
+Write-Host "Zephyr SDK: $env:ZEPHYR_SDK_INSTALL_DIR"
 Write-Host "Board: $Board"
 Write-Host "Git safe.directory: process-local wildcard"
 
