@@ -8,9 +8,14 @@
 
 #include <zephyr/kernel.h>
 #include <soc.h>
+#include <string.h>
 #include "adc_sensor.h"
 
 static volatile uint16_t s_adc[ADC_NUM_CHANNELS];
+
+static uint8_t s_bad_count[ADC_NUM_CHANNELS];
+static uint8_t s_good_count[ADC_NUM_CHANNELS];
+static adc_sensor_fault_status_t s_fault;
 
 void adc_sensor_init(void)
 {
@@ -65,4 +70,77 @@ void adc_sensor_read(uint16_t out[ADC_NUM_CHANNELS])
     for (uint8_t i = 0U; i < ADC_NUM_CHANNELS; i++) {
         out[i] = s_adc[i];
     }
+}
+
+void adc_sensor_fault_reset(void)
+{
+    (void)memset(s_bad_count, 0, sizeof(s_bad_count));
+    (void)memset(s_good_count, 0, sizeof(s_good_count));
+    (void)memset(&s_fault, 0, sizeof(s_fault));
+}
+
+void adc_sensor_fault_get(adc_sensor_fault_status_t *status)
+{
+    if (status != NULL) {
+        *status = s_fault;
+    }
+}
+
+bool adc_sensor_fault_update(const uint16_t sample[ADC_NUM_CHANNELS],
+                             adc_sensor_fault_status_t *status)
+{
+    uint8_t old_active = s_fault.active_mask;
+    uint8_t old_low = s_fault.low_mask;
+    uint8_t old_high = s_fault.high_mask;
+
+    if (sample == NULL) {
+        adc_sensor_fault_get(status);
+        return false;
+    }
+
+    for (uint8_t i = 0U; i < ADC_NUM_CHANNELS; i++) {
+        uint8_t bit = (uint8_t)(1U << i);
+        bool low = (sample[i] <= ADC_SENSOR_FAULT_LOW_THRESHOLD);
+        bool high = (sample[i] >= ADC_SENSOR_FAULT_HIGH_THRESHOLD);
+        bool bad = low || high;
+        bool active = ((s_fault.active_mask & bit) != 0U);
+
+        if (bad) {
+            s_good_count[i] = 0U;
+            if (s_bad_count[i] < ADC_SENSOR_FAULT_ASSERT_COUNT) {
+                s_bad_count[i]++;
+            }
+            if (s_bad_count[i] >= ADC_SENSOR_FAULT_ASSERT_COUNT) {
+                s_fault.active_mask |= bit;
+                if (low) {
+                    s_fault.low_mask |= bit;
+                    s_fault.high_mask &= (uint8_t)~bit;
+                } else {
+                    s_fault.high_mask |= bit;
+                    s_fault.low_mask &= (uint8_t)~bit;
+                }
+            }
+            continue;
+        }
+
+        s_bad_count[i] = 0U;
+        if (active) {
+            if (s_good_count[i] < ADC_SENSOR_FAULT_RECOVER_COUNT) {
+                s_good_count[i]++;
+            }
+            if (s_good_count[i] >= ADC_SENSOR_FAULT_RECOVER_COUNT) {
+                s_fault.active_mask &= (uint8_t)~bit;
+                s_fault.low_mask &= (uint8_t)~bit;
+                s_fault.high_mask &= (uint8_t)~bit;
+                s_good_count[i] = 0U;
+            }
+        } else {
+            s_good_count[i] = 0U;
+        }
+    }
+
+    adc_sensor_fault_get(status);
+    return (old_active != s_fault.active_mask)
+        || (old_low != s_fault.low_mask)
+        || (old_high != s_fault.high_mask);
 }

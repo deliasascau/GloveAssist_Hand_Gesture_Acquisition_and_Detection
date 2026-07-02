@@ -1,45 +1,54 @@
 # GloveAssist ESP32 - Application Kconfig
 #
 # WiFi and MQTT credentials are configured here.
-# Override in prj_wifi_mqtt.conf or via west build -DCONFIG_xxx=...
+# Override in prj.conf or via west build -DCONFIG_xxx=...
 
 config GLOVE_WIFI_SSID
     string "WiFi network SSID"
-    default "MyNetwork"
+    default ""
     help
       SSID of the WiFi access point to connect to.
-      Only used when CONFIG_WIFI is enabled (prj_wifi_mqtt.conf).
+      Used by the default Adafruit IO cloud build.
 
 config GLOVE_WIFI_PASSWORD
     string "WiFi network password"
-    default "password"
+    default ""
     help
       WPA2 pre-shared key for the WiFi network.
       Only used when CONFIG_WIFI is enabled.
 
 config GLOVE_MQTT_BROKER_HOST
     string "MQTT broker hostname"
-    default "test.mosquitto.org"
+    default "io.adafruit.com"
     help
       Hostname (or IP) of the MQTT broker.
-      Default: public Mosquitto test broker (no auth, no TLS).
+      Final demo profile uses Adafruit IO over MQTT/TLS.
+
+config GLOVE_MQTT_WEBSOCKET
+    bool "Use MQTT over WebSocket"
+    depends on MQTT_LIB_WEBSOCKET && WEBSOCKET_CLIENT
+    default n
+    help
+      Use MQTT over WebSocket. For Adafruit IO this uses TLS on port 443
+      with the /mqtt WebSocket path, useful when networks block port 8883.
 
 config GLOVE_MQTT_BROKER_PORT
     int "MQTT broker port"
+    default 443 if GLOVE_MQTT_WEBSOCKET
     default 8883 if GLOVE_MQTT_TLS
     default 1883
     range 1 65535
     help
       TCP port of the MQTT broker.
-      Standard: 1883 (plain), 8883 (TLS).
+      Standard: 1883 (plain), 8883 (TLS), 443 (MQTT over WebSocket).
 
 config GLOVE_MQTT_TLS
     bool "Enable TLS for MQTT connection"
     depends on MQTT_LIB_TLS
-    default n
+    default y
     help
       Use MQTT_TRANSPORT_SECURE (TLS 1.2/1.3) instead of plain TCP.
-      Requires a CA certificate in application/esp32_app/certs/mosquitto_ca.pem.
+      Requires a CA certificate in application/esp32_app/certs/broker_ca.pem.
       Automatically sets default broker port to 8883.
 
 config GLOVE_MQTT_TLS_SEC_TAG
@@ -49,6 +58,30 @@ config GLOVE_MQTT_TLS_SEC_TAG
     help
       Zephyr TLS security tag used to register the broker CA certificate
       via tls_credential_add(). Must be unique across the application.
+
+config GLOVE_MQTT_USERNAME
+    string "MQTT broker username"
+    default ""
+    help
+      Username for MQTT CONNECT authentication.
+      For Adafruit IO: your Adafruit IO username (e.g. "johndoe").
+      Leave empty only when using a broker profile that does not require auth.
+
+config GLOVE_MQTT_PASSWORD
+    string "MQTT broker password / API key"
+    default ""
+    help
+      Password for MQTT CONNECT authentication.
+      For Adafruit IO: your Adafruit IO Active Key (not account password).
+      Leave empty for anonymous brokers.
+
+config GLOVE_MQTT_AUTH
+    bool "Enable MQTT username/password authentication"
+    default n
+    help
+      Set to y when GLOVE_MQTT_USERNAME and GLOVE_MQTT_PASSWORD are provided.
+      Enables MQTT CONNECT with credentials and Adafruit IO topic format.
+      Enabled by prj.conf when Adafruit IO credentials are configured.
 
 # Pull in Zephyr's Kconfig tree (REQUIRED - must be last)
 source "Kconfig.zephyr"

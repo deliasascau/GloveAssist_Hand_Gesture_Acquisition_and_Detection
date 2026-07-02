@@ -9,7 +9,7 @@
  * Phase 4 active:
  *   PB10/PB11: I2C2 SCL/SDA -> SSD1306 OLED 128x64 (0x3C)
  * Phase 5 active:
- *   PB4:  Buzzer (GPIO active-high)
+ *   PB4:  Buzzer pasiv (TIM3_CH1 PWM)
  *   PB6:  Motor vibratii (TIM4_CH1 PWM)
  */
 
@@ -62,10 +62,26 @@
 	status = "disabled";
 };
 
+&iwdg {
+	status = "okay";
+};
+
 /* Phase 5: TIM4 CH1 for motor vibratii PWM on PB6
  * Prescaler 7 → TIM4 runs at 8 MHz / 8 = 1 MHz.
  * period_ns = 1 000 000 → ARR = 999 → 1 kHz PWM with 1000-step resolution.
  * (Old value 7999 gave 1 kHz tick → ARR = 0 → duty always 0 → motor dead) */
+&timers3 {
+	status = "okay";
+	st,prescaler = <7>;
+
+	pwm3: pwm {
+		status = "okay";
+		pinctrl-0 = <&tim3_ch1_remap2_pwm_out_pb4>;
+		pinctrl-names = "default";
+		#pwm-cells = <3>;
+	};
+};
+
 &timers4 {
 	status = "okay";
 	st,prescaler = <7>;  /* 8MHz / 8 = 1 MHz tick → 1 kHz PWM w/ 1000 steps */
@@ -94,7 +110,8 @@
  * HSERDY, blocking all peripheral init.
  *
  * Fix: disable HSE and PLL, run the system on the internal HSI RC at 8 MHz.
- * USART1 BRR = 8 000 000 / 115 200 = 69 -> baud error < 0.4 % (fine).
+ * USART1 is configured at 57600 baud below; HSI gives enough timing margin
+ * for the inter-MCU UART in this prototype.
  */
 &clk_hse {
 	status = "disabled";
@@ -114,7 +131,8 @@
 / {
 	aliases {
 		led0    = &led_builtin;
-		buzzer0 = &buzzer_gpio;
+		watchdog0 = &iwdg;
+		pwm-buzz = &buzzer_pwm;
 		pwm-mot = &motor_pwm;  /* must point to pwm consumer, not controller */
 		alert-out = &alert_out_gpio;  /* PB0 -> ESP32 GPIO18 */
 		alert-in  = &alert_in_gpio;   /* PB1 <- ESP32 GPIO19 */
@@ -129,19 +147,14 @@
 		};
 	};
 
-	/* Phase 5: Buzzer on PB4 (active-high, GPIO on/off for simple beep) */
-	buzzer_gpios {
-		compatible = "gpio-leds";
-
-		buzzer_gpio: buzzer_0 {
-			gpios = <&gpiob 4 GPIO_ACTIVE_HIGH>;
-			label = "Buzzer PB4";
-		};
-	};
-
-	/* PWM consumer node: TIM4_CH1 (PB6) for motor vibration */
-	motor_vibration {
+	/* PWM consumer nodes: TIM3_CH1 PB4 buzzer, TIM4_CH1 PB6 motor. */
+	haptic_pwms {
 		compatible = "pwm-leds";
+		buzzer_pwm: buzzer_0 {
+			/* channel 1 = TIM3_CH1 on PB4, period is overwritten at runtime */
+			pwms = <&pwm3 1 1000000 0>;
+		};
+
 		motor_pwm: motor_0 {
 			/* channel 1 = TIM4_CH1 (Zephyr pwm_stm32 uses 1-indexed channels 1-4)
 			 * period = 1 000 000 ns = 1 ms = 1 kHz, normal polarity */

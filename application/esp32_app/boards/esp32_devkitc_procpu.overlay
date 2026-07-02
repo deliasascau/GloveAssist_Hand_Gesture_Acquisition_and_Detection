@@ -21,7 +21,7 @@
 	};
 };
 
-/* UART2: STM32 inter-MCU @ 115200 baud. */
+/* UART2: STM32 inter-MCU @ 57600 baud. */
 &uart2 {
 	status = "okay";
 	current-speed = <57600>;

@@ -18,7 +18,7 @@
  * Gesture must be stable for this many ms before being reported.
  * 2000ms matches the old AVR project — adequate for limited motor control.
  */
-#define GESTURE_STABLE_MS  2000U
+#define GESTURE_STABLE_MS  1000U
 
 /**
  * @brief Load per-finger calibration profiles (open-hand and per-gesture bent values).
@@ -33,7 +33,7 @@
  * After this call, gesture_classify() uses normalized hysteresis scoring.
  * Before this call it falls back to binary FLEX_THRESH comparison.
  */
-void gesture_set_profiles(const uint16_t open_avg[4], const uint16_t fist_avg[4]);
+bool gesture_set_profiles(const uint16_t open_avg[4], const uint16_t fist_avg[4]);
 
 /** @return True if calibration profiles have been loaded. */
 bool gesture_has_profiles(void);
@@ -43,7 +43,8 @@ bool gesture_has_profiles(void);
  *
  * With profiles: each finger gets a 0-100 bent score with hysteresis bands
  * (score > 65 = bent sticky, score < 35 = extended sticky, in between = keep state).
- * The bent-finger bit mask maps to: WATER(0001), WC(0011), FOOD(0111), HELP(1111).
+ * The mask accepts both cumulative bent gestures and raised-finger gestures:
+ * WATER(0001 or 1110), WC(0011 or 1100), FOOD(0111 or 1000), HELP(1111).
  *
  * Without profiles: binary FLEX_THRESH fallback.
  *
@@ -51,6 +52,9 @@ bool gesture_has_profiles(void);
  * @return Detected gesture_id_t.
  */
 gesture_id_t gesture_classify(const uint16_t adc[4]);
+
+/** @return Last bent-finger mask computed by gesture_classify(). */
+uint8_t gesture_last_bent_mask(void);
 
 /**
  * @brief Return a human-readable name for a gesture.

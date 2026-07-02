@@ -4,7 +4,7 @@
  * Controls:
  *   OLED SSD1306 128×64 via Zephyr Display API (I2C2 PB10/PB11)
  *   Motor vibration via hardware PWM TIM4_CH1 (PB6)
- *   Passive buzzer PWM-software bit-bang (PB4)
+ *   Passive buzzer via hardware PWM TIM3_CH1 (PB4)
  *   Built-in LED (PC13, active-low)
  */
 
@@ -16,6 +16,20 @@
 
 /** @brief Initialise all actuators (must be called once from main). */
 void haptic_init(void);
+
+/*
+ * Async interface used by the STM32 main/UART path.
+ * These functions enqueue work for the haptic thread and return immediately.
+ */
+void haptic_post_oled_show(const char *line1, const char *line2);
+void haptic_post_buzzer_beep(uint8_t count, uint32_t pulse_ms, uint32_t gap_ms);
+void haptic_post_motor_pulse(uint32_t duty_pct, uint32_t dur_ms);
+void haptic_post_caregiver_ack(uint8_t gesture_id);
+void haptic_post_gesture_feedback(uint8_t gesture_id);
+void haptic_post_led_ack(uint8_t count);
+void haptic_post_bad_cmd_diag(void);
+void haptic_post_oled_calib_show(uint8_t state, uint8_t idx, uint8_t mid,
+                                 uint8_t rng, uint8_t pnk);
 
 /** @brief Show up to two text lines on the SSD1306 OLED (pages 0 and 2). */
 void haptic_oled_show(const char *line1, const char *line2);
@@ -37,10 +51,10 @@ void haptic_oled_show4(const char *l0, const char *l2,
  */
 void haptic_oled_idle_tick(void);
 
-/** @brief Generate a tone on the passive buzzer at @p freq_hz Hz for @p duration_ms ms. */
+/** @brief Generate a hardware PWM tone at @p freq_hz Hz for @p duration_ms ms. */
 void haptic_tone(uint32_t freq_hz, uint32_t duration_ms);
 
-/** @brief Beep the passive buzzer @p count times at 2700 Hz. */
+/** @brief Beep the passive buzzer @p count times. */
 void haptic_buzzer_beep(uint8_t count, uint32_t pulse_ms, uint32_t gap_ms);
 
 /** @brief Play boot-up welcome melody (C-E-G arpeggio). */

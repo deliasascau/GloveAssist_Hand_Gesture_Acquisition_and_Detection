@@ -2,7 +2,7 @@
 # GloveAssist Unit Tests — Ztest
 #
 # Tests cover transport-agnostic modules only (no hardware drivers):
-#   - frame_protocol.c : crc8_ccitt(), frame_build(), frame_validate()
+#   - frame_protocol.c : frame_build(), frame_build_hmac(), frame_validate_hmac()
 #
 # Build: west build -b native_sim tests/
 

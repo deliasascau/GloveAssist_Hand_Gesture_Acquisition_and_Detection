@@ -1,5 +1,7 @@
 # GloveAssist - Dual MCU Embedded Project
 
+![CI](https://github.com/deliasascau/GloveAssist_Hand_Gesture_Acquisition_and_Detection/actions/workflows/ci.yml/badge.svg)
+
 ## Purpose
 GloveAssist is a bare-metal C embedded system with dual MCU architecture:
 - STM32F103 (sensor acquisition, local processing, deterministic control)

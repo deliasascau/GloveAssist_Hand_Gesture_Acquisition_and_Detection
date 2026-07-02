@@ -3,7 +3,7 @@
  *
  * OLED:   Zephyr Display API on SSD1306 (I2C2, DT nodelabel ssd1306).
  * Motor:  Zephyr PWM API on TIM4_CH1 PB6 (DT alias pwm-mot → motor_pwm).
- * Buzzer: GPIO on-off (DT alias buzzer0).
+ * Buzzer: Zephyr PWM API on TIM3_CH1 PB4 (DT alias pwm-buzz).
  * LED:    GPIO active-low (DT alias led0 = PC13).
  */
 
@@ -18,11 +18,47 @@
 /* ── Device bindings ─────────────────────────────────────────────────── */
 static const struct device      *s_oled   = DEVICE_DT_GET(DT_NODELABEL(ssd1306));
 static const struct pwm_dt_spec  s_motor  = PWM_DT_SPEC_GET(DT_ALIAS(pwm_mot));
-static const struct gpio_dt_spec s_buzzer = GPIO_DT_SPEC_GET(DT_ALIAS(buzzer0), gpios);
+static const struct pwm_dt_spec  s_buzzer = PWM_DT_SPEC_GET(DT_ALIAS(pwm_buzz));
 static const struct gpio_dt_spec s_led    = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
 
 static bool     s_oled_ready;
 static uint32_t s_oled_activity_time;
+
+#define HAPTIC_QUEUE_LEN          10U
+#define HAPTIC_THREAD_STACK_SIZE  1536U
+#define HAPTIC_THREAD_PRIORITY    6
+#define HAPTIC_TEXT_LEN           17U
+
+typedef enum {
+    HAPTIC_MSG_OLED_SHOW,
+    HAPTIC_MSG_BUZZER_BEEP,
+    HAPTIC_MSG_MOTOR_PULSE,
+    HAPTIC_MSG_CAREGIVER_ACK,
+    HAPTIC_MSG_GESTURE_FEEDBACK,
+    HAPTIC_MSG_LED_ACK,
+    HAPTIC_MSG_BAD_CMD_DIAG,
+    HAPTIC_MSG_OLED_CALIB,
+} haptic_msg_type_t;
+
+typedef struct {
+    haptic_msg_type_t type;
+    uint8_t           arg0;
+    uint8_t           arg1;
+    uint8_t           arg2;
+    uint8_t           arg3;
+    uint8_t           arg4;
+    uint32_t          duration_ms;
+    uint32_t          gap_ms;
+    char              line1[HAPTIC_TEXT_LEN];
+    char              line2[HAPTIC_TEXT_LEN];
+} haptic_msg_t;
+
+static void haptic_thread(void *a, void *b, void *c);
+
+K_MSGQ_DEFINE(s_haptic_msgq, sizeof(haptic_msg_t), HAPTIC_QUEUE_LEN, 4);
+K_MUTEX_DEFINE(s_haptic_io_lock);
+K_THREAD_DEFINE(s_haptic_tid, HAPTIC_THREAD_STACK_SIZE, haptic_thread,
+                NULL, NULL, NULL, HAPTIC_THREAD_PRIORITY, 0, 0);
 
 /* ── 5×7 pixel font — ASCII 0x20 (' ') .. 0x7A ('z') ───────────────── */
 static const uint8_t font5x7[][5] = {
@@ -192,13 +228,137 @@ static void motor_set_duty(uint32_t duty_pct)
 
 /* ── Public API ──────────────────────────────────────────────────────── */
 
+static void haptic_copy_text(char dst[HAPTIC_TEXT_LEN], const char *src)
+{
+    (void)memset(dst, 0, HAPTIC_TEXT_LEN);
+    if (src == NULL) {
+        return;
+    }
+
+    for (uint8_t i = 0U; i < (HAPTIC_TEXT_LEN - 1U); i++) {
+        if (src[i] == '\0') {
+            break;
+        }
+        dst[i] = src[i];
+    }
+}
+
+static void haptic_enqueue(const haptic_msg_t *msg)
+{
+    haptic_msg_t dropped;
+
+    if (msg == NULL) {
+        return;
+    }
+
+    if ((msg->type == HAPTIC_MSG_GESTURE_FEEDBACK) && (msg->arg0 == 0x04U)) {
+        k_msgq_purge(&s_haptic_msgq);  /* emergency feedback jumps the queue */
+    }
+
+    if (k_msgq_put(&s_haptic_msgq, msg, K_NO_WAIT) == 0) {
+        return;
+    }
+
+    /* Keep the newest user feedback if the queue is saturated. */
+    (void)k_msgq_get(&s_haptic_msgq, &dropped, K_NO_WAIT);
+    (void)k_msgq_put(&s_haptic_msgq, msg, K_NO_WAIT);
+}
+
+void haptic_post_oled_show(const char *line1, const char *line2)
+{
+    haptic_msg_t msg = {
+        .type = HAPTIC_MSG_OLED_SHOW,
+    };
+
+    haptic_copy_text(msg.line1, line1);
+    haptic_copy_text(msg.line2, line2);
+    haptic_enqueue(&msg);
+}
+
+void haptic_post_buzzer_beep(uint8_t count, uint32_t pulse_ms, uint32_t gap_ms)
+{
+    haptic_msg_t msg = {
+        .type        = HAPTIC_MSG_BUZZER_BEEP,
+        .arg0        = count,
+        .duration_ms = pulse_ms,
+        .gap_ms      = gap_ms,
+    };
+
+    haptic_enqueue(&msg);
+}
+
+void haptic_post_motor_pulse(uint32_t duty_pct, uint32_t dur_ms)
+{
+    haptic_msg_t msg = {
+        .type        = HAPTIC_MSG_MOTOR_PULSE,
+        .arg0        = (uint8_t)((duty_pct > 100U) ? 100U : duty_pct),
+        .duration_ms = dur_ms,
+    };
+
+    haptic_enqueue(&msg);
+}
+
+void haptic_post_caregiver_ack(uint8_t gesture_id)
+{
+    haptic_msg_t msg = {
+        .type = HAPTIC_MSG_CAREGIVER_ACK,
+        .arg0 = gesture_id,
+    };
+
+    haptic_enqueue(&msg);
+}
+
+void haptic_post_gesture_feedback(uint8_t gesture_id)
+{
+    haptic_msg_t msg = {
+        .type = HAPTIC_MSG_GESTURE_FEEDBACK,
+        .arg0 = gesture_id,
+    };
+
+    haptic_enqueue(&msg);
+}
+
+void haptic_post_led_ack(uint8_t count)
+{
+    haptic_msg_t msg = {
+        .type = HAPTIC_MSG_LED_ACK,
+        .arg0 = count,
+    };
+
+    haptic_enqueue(&msg);
+}
+
+void haptic_post_bad_cmd_diag(void)
+{
+    haptic_msg_t msg = {
+        .type = HAPTIC_MSG_BAD_CMD_DIAG,
+    };
+
+    haptic_enqueue(&msg);
+}
+
+void haptic_post_oled_calib_show(uint8_t state, uint8_t idx, uint8_t mid,
+                                 uint8_t rng, uint8_t pnk)
+{
+    haptic_msg_t msg = {
+        .type = HAPTIC_MSG_OLED_CALIB,
+        .arg0 = state,
+        .arg1 = idx,
+        .arg2 = mid,
+        .arg3 = rng,
+        .arg4 = pnk,
+    };
+
+    haptic_enqueue(&msg);
+}
+
 void haptic_init(void)
 {
     if (device_is_ready(s_led.port)) {
         (void)gpio_pin_configure_dt(&s_led, GPIO_OUTPUT_INACTIVE);
     }
-    if (device_is_ready(s_buzzer.port)) {
-        (void)gpio_pin_configure_dt(&s_buzzer, GPIO_OUTPUT_INACTIVE);
+    if (pwm_is_ready_dt(&s_buzzer)) {
+        (void)pwm_set_dt(&s_buzzer, 0U, 0U);
     }
     if (pwm_is_ready_dt(&s_motor)) {
         motor_set_duty(0U);
@@ -221,6 +381,10 @@ void haptic_oled_idle_tick(void)
     uint32_t now_ms = k_uptime_get_32();
     static bool s_in_idle;
 
+    if (k_mutex_lock(&s_haptic_io_lock, K_NO_WAIT) != 0) {
+        return;
+    }
+
     if ((now_ms - s_oled_activity_time) >= 30000U) {  /* 30 s idle before reverting */
         if (!s_in_idle) {
             s_in_idle = true;
@@ -232,6 +396,8 @@ void haptic_oled_idle_tick(void)
     } else {
         s_in_idle = false;
     }
+
+    k_mutex_unlock(&s_haptic_io_lock);
 }
 
 void haptic_oled_show4(const char *l0, const char *l2,
@@ -240,44 +406,28 @@ void haptic_oled_show4(const char *l0, const char *l2,
     oled_show4(l0, l2, l4, l6);
 }
 
-/* Internal: exact-frequency square wave at ~7% duty cycle.
- * Short pulse = low volume, less harsh. Min 30 µs to drive the piezo. */
+/* Passive buzzer tone generated by hardware PWM. */
 static void raw_tone(uint32_t freq_hz, uint32_t duration_ms)
 {
-    if ((freq_hz == 0U) || (duration_ms == 0U)) {
+    uint32_t period_ns;
+
+    if (!pwm_is_ready_dt(&s_buzzer) || (duration_ms == 0U)) {
         return;
     }
-    uint32_t period_us = 1000000U / freq_hz;
-    uint32_t on_us     = period_us / 2U;   /* 50% duty — max volume for passive piezo */
-    uint32_t off_us    = period_us - on_us;
-    uint32_t cycles    = (duration_ms * freq_hz) / 1000U;
 
-    for (uint32_t i = 0U; i < cycles; i++) {
-        (void)gpio_pin_set_dt(&s_buzzer, 1);
-        k_busy_wait(on_us);
-        (void)gpio_pin_set_dt(&s_buzzer, 0);
-        k_busy_wait(off_us);
+    if (freq_hz == 0U) {
+        freq_hz = 2000U;
     }
+
+    period_ns = 1000000000U / freq_hz;
+    (void)pwm_set_dt(&s_buzzer, period_ns, period_ns / 2U);
+    k_msleep(duration_ms);
+    (void)pwm_set_dt(&s_buzzer, 0U, 0U);
 }
 
 void haptic_tone(uint32_t freq_hz, uint32_t duration_ms)
 {
-    if (!device_is_ready(s_buzzer.port) || (freq_hz == 0U)) {
-        return;
-    }
-    /* Smooth attack: glide from 80% to 100% of target freq over ~20 ms.
-     * Eliminates the abrupt click-start of a square wave on passive buzzers. */
-    uint32_t attack_ms = (duration_ms >= 60U) ? 20U : (duration_ms / 3U);
-    uint32_t start_hz  = (freq_hz * 80U) / 100U;
-
-    for (uint32_t s = 0U; s < 8U; s++) {
-        uint32_t f = start_hz + ((freq_hz - start_hz) * (s + 1U)) / 8U;
-        raw_tone(f, attack_ms / 8U);
-    }
-    /* Sustain at target frequency */
-    if (duration_ms > attack_ms) {
-        raw_tone(freq_hz, duration_ms - attack_ms);
-    }
+    raw_tone(freq_hz, duration_ms);
 }
 
 void haptic_buzzer_beep(uint8_t count, uint32_t pulse_ms, uint32_t gap_ms)
@@ -314,7 +464,7 @@ void haptic_caregiver_ack(uint8_t gesture_id)
     /*
      * OLED 4 linii:  "> OK PRIMIT! <" / eticheta gest specific / "Multumim!" / "Vine acum!"
      * Sunet: C6-E6-G6-C7 ascendent (confirmare vesela)
-     * Motor: dit-dit-DIT (~570ms total, sub LINK_TIMEOUT_MS=4000ms)
+     * Motor: dit-dit-DIT (~570ms total, sub LINK_TIMEOUT_MS=3000ms)
      */
     static const char * const s_ack_labels[] = {
         "OK primit!",   /* GESTURE_NONE    (0) */
@@ -335,10 +485,10 @@ void haptic_caregiver_ack(uint8_t gesture_id)
     haptic_tone(1568U, 80U);    /* G6 */
     haptic_tone(2093U, 220U);   /* C7 */
 
-    /* dit-dit-DIT motor: scurt-scurt-lung (~570ms total) */
-    motor_set_duty(70U); k_msleep(100U); motor_set_duty(0U); k_msleep(60U);
-    motor_set_duty(70U); k_msleep(100U); motor_set_duty(0U); k_msleep(60U);
-    motor_set_duty(80U); k_msleep(250U); motor_set_duty(0U);
+    /* dit-dit-DIT motor: scurt-scurt-lung (~650ms total) */
+    motor_set_duty(90U); k_msleep(130U); motor_set_duty(0U); k_msleep(80U);
+    motor_set_duty(90U); k_msleep(130U); motor_set_duty(0U); k_msleep(80U);
+    motor_set_duty(100U); k_msleep(320U); motor_set_duty(0U);
 }
 
 void haptic_gesture_feedback(uint8_t gesture_id)
@@ -355,47 +505,49 @@ void haptic_gesture_feedback(uint8_t gesture_id)
      */
     switch ((uint8_t)gesture_id) {
 
-    case 0x01U: /* GESTURE_WATER */
+    case 0x01U: /* GESTURE_WATER — 1 puls lung, calm */
         oled_show4("** WATER **", "Apa", "O . . .", "1 deget");
-        motor_set_duty(80U);
-        haptic_tone(1568U, 500U);       /* G6 — 500 ms, audible */
+        motor_set_duty(90U);
+        haptic_tone(1568U, 500U);       /* G6 — 500 ms */
+        motor_set_duty(0U);
+        k_msleep(100U);
+        motor_set_duty(90U); k_msleep(400U); motor_set_duty(0U);
+        break;
+
+    case 0x02U: /* GESTURE_WC — 2 pulsuri clare */
+        oled_show4("** WC **", "Toaleta", "O O . .", "2 degete");
+        motor_set_duty(90U);
+        haptic_tone(1319U, 100U);       /* E6 */
+        k_msleep(40U);
+        haptic_tone(1760U, 180U);       /* A6 */
+        motor_set_duty(0U);
+        k_msleep(100U);
+        motor_set_duty(90U); k_msleep(200U); motor_set_duty(0U); k_msleep(100U);
+        motor_set_duty(90U); k_msleep(200U); motor_set_duty(0U);
+        break;
+
+    case 0x03U: /* GESTURE_FOOD — 3 pulsuri crescatoare */
+        oled_show4("** FOOD **", "Mancare", "O O O .", "3 degete");
+        motor_set_duty(90U);
+        haptic_tone(1047U, 80U);        /* C6 */
+        haptic_tone(1319U, 80U);        /* E6 */
+        haptic_tone(1568U, 150U);       /* G6 */
         motor_set_duty(0U);
         k_msleep(80U);
-        motor_set_duty(80U); k_msleep(300U); motor_set_duty(0U);
+        motor_set_duty(90U); k_msleep(150U); motor_set_duty(0U); k_msleep(80U);
+        motor_set_duty(90U); k_msleep(150U); motor_set_duty(0U); k_msleep(80U);
+        motor_set_duty(90U); k_msleep(250U); motor_set_duty(0U);
         break;
 
-    case 0x02U: /* GESTURE_WC */
-        oled_show4("** WC **", "Toaleta", "O O . .", "2 degete");
-        motor_set_duty(40U);
-        haptic_tone(1319U, 90U);        /* E6 */
-        k_busy_wait(40000U);
-        haptic_tone(1760U, 150U);       /* A6 */
-        motor_set_duty(0U);
-        k_msleep(60U);
-        motor_set_duty(40U); k_msleep(100U); motor_set_duty(0U);
-        break;
-
-    case 0x03U: /* GESTURE_FOOD */
-        oled_show4("** FOOD **", "Mancare", "O O O .", "3 degete");
-        motor_set_duty(40U);
-        haptic_tone(1047U, 60U);        /* C6 */
-        haptic_tone(1319U, 60U);        /* E6 */
-        haptic_tone(1568U, 120U);       /* G6 */
-        motor_set_duty(0U);
-        k_msleep(50U);
-        motor_set_duty(40U); k_msleep(80U); motor_set_duty(0U); k_msleep(60U);
-        motor_set_duty(40U); k_msleep(80U); motor_set_duty(0U);
-        break;
-
-    case 0x04U: /* GESTURE_HELP */
+    case 0x04U: /* GESTURE_HELP — motor continuu + alarme rapide */
         oled_show4("!!! SOS !!!", "Ajutor!", "O O O O", "!! URGENTA !!");
         motor_set_duty(100U);
-        /* 4x(70ms ton + 50ms pauza) + 160ms hold motor ≈ 710ms total */
-        raw_tone(2000U, 70U); k_busy_wait(50000U);
-        raw_tone(2000U, 70U); k_busy_wait(50000U);
-        raw_tone(2000U, 70U); k_busy_wait(50000U);
-        raw_tone(2000U, 70U);
-        k_msleep(160U);
+        /* 4x(80ms ton + 60ms pauza) + 200ms hold motor ≈ 760ms total */
+        raw_tone(2000U, 80U); k_msleep(60U);
+        raw_tone(2000U, 80U); k_msleep(60U);
+        raw_tone(2000U, 80U); k_msleep(60U);
+        raw_tone(2000U, 80U);
+        k_msleep(200U);
         motor_set_duty(0U);
         break;
 
@@ -466,5 +618,70 @@ void haptic_led_toggle(void)
 {
     if (device_is_ready(s_led.port)) {
         (void)gpio_pin_toggle_dt(&s_led);
+    }
+}
+
+static void haptic_thread(void *a, void *b, void *c)
+{
+    ARG_UNUSED(a);
+    ARG_UNUSED(b);
+    ARG_UNUSED(c);
+
+    while (1) {
+        haptic_msg_t msg;
+
+        if (k_msgq_get(&s_haptic_msgq, &msg, K_FOREVER) != 0) {
+            continue;
+        }
+
+        k_mutex_lock(&s_haptic_io_lock, K_FOREVER);
+
+        switch (msg.type) {
+        case HAPTIC_MSG_OLED_SHOW:
+            haptic_oled_show(msg.line1, msg.line2);
+            break;
+
+        case HAPTIC_MSG_BUZZER_BEEP:
+            haptic_buzzer_beep(msg.arg0, msg.duration_ms, msg.gap_ms);
+            break;
+
+        case HAPTIC_MSG_MOTOR_PULSE:
+            haptic_motor_pulse(msg.arg0, msg.duration_ms);
+            break;
+
+        case HAPTIC_MSG_CAREGIVER_ACK:
+            haptic_caregiver_ack(msg.arg0);
+            break;
+
+        case HAPTIC_MSG_GESTURE_FEEDBACK:
+            haptic_gesture_feedback(msg.arg0);
+            break;
+
+        case HAPTIC_MSG_LED_ACK:
+            for (uint8_t i = 0U; i < msg.arg0; i++) {
+                haptic_led_set(true);
+                k_msleep(80U);
+                haptic_led_set(false);
+                k_msleep(80U);
+            }
+            break;
+
+        case HAPTIC_MSG_BAD_CMD_DIAG:
+            haptic_oled_show("BAD CMD", "AUTH/SOF");
+            haptic_led_set(true);
+            k_msleep(150U);
+            haptic_led_set(false);
+            break;
+
+        case HAPTIC_MSG_OLED_CALIB:
+            haptic_oled_calib_show(msg.arg0, msg.arg1, msg.arg2,
+                                   msg.arg3, msg.arg4);
+            break;
+
+        default:
+            break;
+        }
+
+        k_mutex_unlock(&s_haptic_io_lock);
     }
 }

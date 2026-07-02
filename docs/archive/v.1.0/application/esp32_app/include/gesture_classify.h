@@ -3,7 +3,7 @@
  * @brief Gesture classification engine (ESP32 brain)
  * 
  * Takes filtered sensor values, applies threshold-based rules
- * to detect gestures. Future: integrate TinyML for advanced gestures.
+ * to detect gestures.
  * 
  * NEW ARCHITECTURE (v2.0):
  * - STM32: Dumb sensor hub

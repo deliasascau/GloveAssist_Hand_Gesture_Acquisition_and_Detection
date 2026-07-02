@@ -24,7 +24,7 @@
 #define CALIB_NUM_FINGERS   4U    /* index, middle, ring, pinky               */
 #define CALIB_SETTLE_MS  4000U    /* user prep time per gesture (3-2-1 @ 1.3s)*/
 #define CALIB_PHASE_MS   5000U    /* effective sampling time per gesture       */
-#define CALIB_SCHEMA_VER    4U    /* v4: per-gesture profiles (5 × 4 uint16)  */
+#define CALIB_SCHEMA_VER    5U    /* v5: per-gesture profiles (5 × 4 uint16)  */
 
 /**
  * @brief Load saved per-gesture profiles from NVS.

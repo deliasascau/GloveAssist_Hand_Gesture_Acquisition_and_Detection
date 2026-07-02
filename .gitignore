@@ -8,6 +8,8 @@ build-*/
 
 # Secrets — never commit credentials
 application/common/include/app_secrets.h
+application/esp32_app/credentials.conf
+application/esp32_app/*.local.conf
 
 # Compiled Object Files
 *.o
@@ -69,6 +71,17 @@ ENV/
 __pycache__/
 *.py[cod]
 *$py.class
+
+# GitHub Actions self-hosted runner (instalat local, nu face parte din repo)
+actions-runner/
+_work/
+
+# Zephyr workspace build (pe mașina locală, generat automat)
+zephyr/
+modules/
+bootloader/
+tools/
+.west/
 
 # Jupyter Notebooks Checkpoints (TinyML dataset analysis)
 .ipynb_checkpoints/
@@ -145,3 +158,10 @@ datasets/raw/*.bin
 # AI assistant session data
 .claude/
 .copilot/
+
+# Markdown — doar README.md pe GitHub, restul local
+*.md
+!README.md
+
+# Proiect vechi — doar referință locală
+old_project/

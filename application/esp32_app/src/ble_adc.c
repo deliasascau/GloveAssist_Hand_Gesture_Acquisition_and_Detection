@@ -1,27 +1,30 @@
 #include "ble_adc.h"
 
+#if defined(CONFIG_BT)
+
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
 
+#include <zephyr/kernel.h>
 #include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/att.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/logging/log.h>
-
+#include <zephyr/settings/settings.h>
 #include "frame_protocol.h"
 #include "gesture.h"
+#include "wifi_mqtt.h"
 
 LOG_MODULE_REGISTER(ble_adc, LOG_LEVEL_INF);
 
-/* Last confirmed gesture — written by main thread, read by BLE RX thread.
- * volatile prevents compiler reordering; single-word enum access is atomic on ARM. */
-static volatile gesture_id_t s_last_gesture = GESTURE_NONE;
+/* Last confirmed gesture — set by main, read by rx_write. */
+static gesture_id_t s_last_gesture = GESTURE_NONE;
 
 /* BLE command flags — set by rx_write, consumed by main loop. */
 static volatile bool        s_calibration_requested;
-static volatile bool        s_ota_requested;
 static volatile bool        s_caregiver_ack_requested;
 static volatile gesture_id_t s_gesture_at_ack;
 
@@ -36,6 +39,14 @@ static struct bt_uuid_128 nus_tx_uuid = BT_UUID_INIT_128(
 
 static struct bt_conn *current_conn;
 static bool notify_enabled;
+static bool link_encrypted;
+static bool security_needed;
+static bool security_pause_started;
+static uint32_t next_security_request_ms;
+
+#define BLE_SECURITY_DELAY_MS        1500U
+#define BLE_SECURITY_PAUSE_SETTLE_MS 800U
+#define BLE_SECURITY_MQTT_PAUSE_MS   10000U
 
 static uint8_t cmd_to_upper(uint8_t c)
 {
@@ -58,22 +69,32 @@ static uint16_t cmd_skip_ws(const uint8_t *data, uint16_t len, uint16_t idx)
     return idx;
 }
 
+static volatile bool s_send_welcome;  /* set in ccc_changed, sent from main loop */
+
 static void ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
     ARG_UNUSED(attr);
 
     notify_enabled = (value == BT_GATT_CCC_NOTIFY);
     LOG_INF("BLE notify %s", notify_enabled ? "enabled" : "disabled");
+
+    if (notify_enabled) {
+        s_send_welcome = true;
+    }
 }
 
 static ssize_t rx_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
                         const void *buf, uint16_t len, uint16_t offset,
                         uint8_t flags)
 {
-    ARG_UNUSED(conn);
     ARG_UNUSED(attr);
     ARG_UNUSED(offset);
     ARG_UNUSED(flags);
+
+    if (bt_conn_get_security(conn) < BT_SECURITY_L2) {
+        LOG_WRN("BLE RX rejected: link not encrypted");
+        return BT_GATT_ERR(BT_ATT_ERR_AUTHENTICATION);
+    }
 
     const uint8_t *data = (const uint8_t *)buf;
     uint16_t i0 = cmd_skip_ws(data, len, 0U);
@@ -100,7 +121,6 @@ static ssize_t rx_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
     bool is_digit_ack = (c0 >= (uint8_t)'1') && (c0 <= (uint8_t)'9');
     bool is_ok_ack    = (c0 == (uint8_t)'O') && (c1 == (uint8_t)'K');
     bool is_calibrate = (c0 == (uint8_t)'C');
-    bool is_ota       = (c0 == (uint8_t)'U');
 
     if (is_digit_ack || is_ok_ack) {
         /* Queue for main loop — main will send CMD_CAREGIVER_ACK to STM32
@@ -113,11 +133,6 @@ static ssize_t rx_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
     if (is_calibrate) {
         s_calibration_requested = true;
         LOG_INF("BLE: calibration requested");
-    }
-
-    if (is_ota) {
-        s_ota_requested = true;
-        LOG_INF("BLE: OTA reboot requested");
     }
 
     return (ssize_t)len;
@@ -133,13 +148,59 @@ static const struct bt_data sd[] = {
         BT_UUID_128_ENCODE(0x6e400001, 0xb5a3, 0xf393, 0xe0a9, 0xe50e24dcca9e)),
 };
 
+/* 500-1000 ms advertising: easier on ESP32 WiFi/BLE coexistence than
+ * BT_LE_ADV_CONN_FAST_1, while still discoverable within a few seconds. */
+#define BLE_ADV_INTERVAL_MIN 0x0320U
+#define BLE_ADV_INTERVAL_MAX 0x0640U
+
+static const struct bt_le_adv_param s_adv_param =
+    BT_LE_ADV_PARAM_INIT(BT_LE_ADV_OPT_CONN,
+                         BLE_ADV_INTERVAL_MIN,
+                         BLE_ADV_INTERVAL_MAX,
+                         NULL);
+
+static void adv_retry_work_handler(struct k_work *work);
+K_WORK_DELAYABLE_DEFINE(s_adv_retry_work, adv_retry_work_handler);
+
+static int ble_start_advertising(void)
+{
+    int err = bt_le_adv_start(&s_adv_param, ad, ARRAY_SIZE(ad),
+                              sd, ARRAY_SIZE(sd));
+
+    if ((err == 0) || (err == -EALREADY)) {
+        LOG_INF("BLE advertising as GloveAssist (coexist slow)");
+        return 0;
+    }
+
+    LOG_WRN("BLE advertising start failed: %d", err);
+    return err;
+}
+
+static void adv_retry_work_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+
+    int err = ble_start_advertising();
+
+    if ((err == -ENOMEM) || (err == -EAGAIN) || (err == -EBUSY)) {
+        (void)k_work_reschedule(&s_adv_retry_work, K_MSEC(1000));
+    }
+}
+
 BT_GATT_SERVICE_DEFINE(nus_svc,
     BT_GATT_PRIMARY_SERVICE(&nus_svc_uuid),
     BT_GATT_CHARACTERISTIC(&nus_tx_uuid.uuid,
                            BT_GATT_CHRC_NOTIFY,
                            BT_GATT_PERM_NONE,
                            NULL, NULL, NULL),
+    /* CCC is only a subscription flag. Keep it writable before encryption so
+     * phone apps do not fail with "reconnect to subscribe". */
     BT_GATT_CCC(ccc_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+    /* RX writable without link-layer encryption: ESP32 RAM is too tight to
+     * run SMP + WiFi/TLS simultaneously without crashing.  Caregiver ACK
+     * is not safety-critical; the actual security is the UART AES+HMAC link
+     * between STM32 and ESP32.  If the phone OS auto-pairs, the bond is
+     * stored and future reconnects re-encrypt transparently. */
     BT_GATT_CHARACTERISTIC(&nus_rx_uuid.uuid,
                            BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
                            BT_GATT_PERM_WRITE,
@@ -153,15 +214,25 @@ static void connected(struct bt_conn *conn, uint8_t err)
         return;
     }
 
-    current_conn = bt_conn_ref(conn);
-
-    /* Request encrypted link immediately after connection.
-     * BT_SECURITY_L2 = unauthenticated pairing (Just-Works) with encryption.
-     * Prevents passive BLE sniffing without requiring a display/passkey. */
-    int sec_err = bt_conn_set_security(conn, BT_SECURITY_L2);
-    if (sec_err != 0) {
-        LOG_WRN("BLE security request failed: %d", sec_err);
+    if (current_conn != NULL) {
+        bt_conn_unref(current_conn);
     }
+    current_conn = bt_conn_ref(conn);
+    notify_enabled = false;
+    link_encrypted = false;
+    security_needed = true;
+    /*
+     * Immediately disconnect WiFi so BLE Secure Connections (P-256 ECC) has
+     * enough heap to complete pairing.  ESP32 cannot run SC + WiFi/TLS
+     * simultaneously without exhausting the shared heap → panic reset.
+     * wifi_mqtt_reconnect_after_ble_pairing() re-enables WiFi once SMP
+     * finishes (called from security_changed and disconnected).
+     */
+    wifi_mqtt_disconnect_for_ble_pairing();
+    security_pause_started = true;   /* WiFi already paused; skip ble_adc_process duplicate */
+    next_security_request_ms = k_uptime_get_32() + BLE_SECURITY_DELAY_MS
+                               + BLE_SECURITY_PAUSE_SETTLE_MS;
+    (void)k_work_cancel_delayable(&s_adv_retry_work);
 
     LOG_INF("BLE connected");
 }
@@ -176,36 +247,86 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
         current_conn = NULL;
     }
     notify_enabled = false;
+    link_encrypted = false;
+    security_needed = false;
+    security_pause_started = false;
+    next_security_request_ms = 0U;
 
-    /* Restart advertising automatically so phone can reconnect
-     * without needing to reset the ESP32. */
-    int err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad),
-                              sd, ARRAY_SIZE(sd));
-    if (err != 0) {
-        LOG_WRN("BLE re-adv failed: %d", err);
-    } else {
-        LOG_INF("BLE advertising restarted");
-    }
+    /* Restore WiFi if it was disconnected for BLE pairing. */
+    wifi_mqtt_reconnect_after_ble_pairing();
+
+    /* Restart outside the stack callback. On ESP32+WiFi, immediate restart can
+     * return -ENOMEM while BT/WiFi buffers are still being released. */
+    (void)k_work_reschedule(&s_adv_retry_work, K_MSEC(500));
 }
 
 static void security_changed(struct bt_conn *conn, bt_security_t level,
                              enum bt_security_err err)
 {
-    ARG_UNUSED(conn);
-
     if (err != BT_SECURITY_ERR_SUCCESS) {
-        LOG_WRN("BLE security failed (level %d, err %d) - link not encrypted",
-                (int)level, (int)err);
+        link_encrypted = false;
+        security_needed = true;
+        security_pause_started = false;
+
+        if (err == BT_SECURITY_ERR_PIN_OR_KEY_MISSING) {
+            /*
+             * Phone has a cached LTK from a previous session but ESP32's NVS
+             * was cleared (e.g. firmware flash with --erase).  Clear the
+             * stale bond on our side and disconnect so the phone reconnects
+             * and triggers a fresh SMP Just Works pairing.
+             */
+            LOG_WRN("BLE stale key: phone LTK not found locally — clearing bond");
+            (void)bt_unpair(BT_ID_DEFAULT, bt_conn_get_dst(conn));            wifi_mqtt_reconnect_after_ble_pairing();            (void)bt_conn_disconnect(conn, BT_HCI_ERR_UNSPECIFIED);
+            return;
+        }
+
+        next_security_request_ms = k_uptime_get_32() + 5000U;
+        wifi_mqtt_reconnect_after_ble_pairing();
+        LOG_WRN("BLE security failed (level %d, err %d/%s) - link not encrypted",
+                (int)level, (int)err, bt_security_err_to_str(err));
         return;
     }
+    link_encrypted = (level >= BT_SECURITY_L2);
+    security_needed = !link_encrypted;
+    security_pause_started = false;
+    /* Pairing complete — allow WiFi to reconnect. */
+    wifi_mqtt_reconnect_after_ble_pairing();
     LOG_INF("BLE link encrypted (security level %d)", (int)level);
 }
+
+static void pairing_complete(struct bt_conn *conn, bool bonded)
+{
+    ARG_UNUSED(conn);
+
+    LOG_INF("BLE pairing complete (%s)", bonded ? "bonded" : "non-bonded");
+}
+
+static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
+{
+    LOG_WRN("BLE pairing failed: %d/%s", (int)reason,
+            bt_security_err_to_str(reason));
+    /*
+     * Remove any partial or stale bond so the next connection attempt starts
+     * a fresh SMP exchange instead of cycling on a mismatched LTK.
+     */
+    (void)bt_unpair(BT_ID_DEFAULT, bt_conn_get_dst(conn));
+}
+
+static struct bt_conn_auth_info_cb auth_info_cb = {
+    .pairing_complete = pairing_complete,
+    .pairing_failed = pairing_failed,
+};
 
 BT_CONN_CB_DEFINE(conn_cb) = {
     .connected       = connected,
     .disconnected    = disconnected,
     .security_changed = security_changed,
 };
+
+/* Slow advertising (500ms min, 1000ms max) gives WiFi enough air time when
+ * BLE+WiFi coexistence is active on ESP32. Still fast enough to be found
+ * by LightBlue/nRF Connect within 2-3 seconds.
+ * 800 * 0.625 ms = 500 ms, 1600 * 0.625 ms = 1000 ms */
 
 int ble_adc_init(void)
 {
@@ -216,15 +337,72 @@ int ble_adc_init(void)
         return err;
     }
 
-    err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad),
-                          sd, ARRAY_SIZE(sd));
+    /*
+     * Load saved bond keys from NVS.  settings_subsys_init() is idempotent;
+     * calling it here is safe even if calibration_init() calls it later.
+     * Without this, bt_enable() registers the BT settings handler but the
+     * stored LTK is never loaded, so every reconnect still requires re-pairing.
+     */
+    (void)settings_subsys_init();
+    (void)settings_load_subtree("bt");
+
+    err = bt_conn_auth_info_cb_register(&auth_info_cb);
     if (err != 0) {
-        LOG_ERR("BLE advertising failed: %d", err);
+        LOG_WRN("BLE auth info callback register failed: %d", err);
+    }
+
+    err = ble_start_advertising();
+    if (err != 0) {
         return err;
     }
 
-    LOG_INF("BLE advertising as GloveAssist");
     return 0;
+}
+
+void ble_adc_process(void)
+{
+    uint32_t now;
+    int err;
+
+    /* Send welcome confirmation when phone first subscribes to notifications. */
+    if (s_send_welcome && notify_enabled && (current_conn != NULL)) {
+        s_send_welcome = false;
+        (void)ble_adc_send_text("GloveAssist OK\n");
+    }
+
+    if ((current_conn == NULL) || link_encrypted || !security_needed) {
+        return;
+    }
+
+    now = k_uptime_get_32();
+    if ((next_security_request_ms != 0U)
+        && ((int32_t)(now - next_security_request_ms) < 0)) {
+        return;
+    }
+
+    if (!security_pause_started) {
+        wifi_mqtt_pause_for_ble_security(BLE_SECURITY_MQTT_PAUSE_MS);
+        security_pause_started = true;
+        next_security_request_ms = now + BLE_SECURITY_PAUSE_SETTLE_MS;
+        LOG_INF("BLE security pending - pausing MQTT/TLS before pairing");
+        return;
+    }
+
+    err = bt_conn_set_security(current_conn, BT_SECURITY_L2);
+    if (err == 0) {
+        LOG_INF("BLE security requested");
+        next_security_request_ms = now + 5000U;
+        return;
+    }
+
+    if ((err == -EALREADY) || (err == -EBUSY)) {
+        next_security_request_ms = now + 1000U;
+        return;
+    }
+
+    LOG_WRN("BLE security request failed: %d", err);
+    security_pause_started = false;
+    next_security_request_ms = now + 3000U;
 }
 
 int ble_adc_send_values(const uint16_t adc[4])
@@ -265,22 +443,16 @@ bool ble_adc_pop_calibration_request(void)
     return false;
 }
 
-bool ble_adc_pop_ota_request(void)
+bool ble_adc_pop_caregiver_ack_request(gesture_id_t *out_gesture)
 {
-    if (s_ota_requested) {
-        s_ota_requested = false;
-        return true;
+    if (!s_caregiver_ack_requested) {
+        return false;
     }
-    return false;
-}
-
-gesture_id_t ble_adc_pop_caregiver_ack_request(void)
-{
-    if (s_caregiver_ack_requested) {
-        s_caregiver_ack_requested = false;
-        return s_gesture_at_ack;
+    s_caregiver_ack_requested = false;
+    if (out_gesture != NULL) {
+        *out_gesture = s_gesture_at_ack;
     }
-    return GESTURE_NONE;
+    return true;
 }
 
 int ble_adc_send_text(const char *text)
@@ -315,3 +487,5 @@ int ble_adc_send_gesture(gesture_id_t gesture, const uint16_t adc[4])
 
     return bt_gatt_notify(current_conn, &nus_svc.attrs[2], buf, (uint16_t)len);
 }
+
+#endif /* CONFIG_BT */

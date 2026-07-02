@@ -30,7 +30,7 @@
                 "-ExecutionPolicy",
                 "Bypass",
                 "-Command",
-                "$env:ZEPHYR_BASE='C:\\zephyr-workspace\\zephyr'; $env:PATH='${workspaceFolder}\\.venv\\Scripts;C:\\zephyr-workspace\\.venv\\Scripts;' + $env:PATH; C:\\zephyr-workspace\\.venv\\Scripts\\python.exe -m west build -p always --sysbuild -b 'esp32_devkitc/esp32/procpu' '${workspaceFolder}\\application\\esp32_app' --build-dir 'C:\\zephyr-workspace\\build-glove-esp32'"
+                "$env:ZEPHYR_BASE='C:\\zephyr-workspace\\zephyr'; $env:PATH='${workspaceFolder}\\.venv\\Scripts;C:\\zephyr-workspace\\.venv\\Scripts;' + $env:PATH; C:\\zephyr-workspace\\.venv\\Scripts\\python.exe -m west build -p always -b 'esp32_devkitc/esp32/procpu' '${workspaceFolder}\\application\\esp32_app' --build-dir 'C:\\zephyr-workspace\\build-glove-esp32'"
             ],
             "group": "build",
             "presentation": {

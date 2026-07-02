@@ -10,7 +10,7 @@
  *
  * Requirements covered:
  *   FR-007 â€” UART CRC frame integrity
- *   FR-008 â€” XOR obfuscation (anti-sniffing)
+ *   XOR obfuscation (anti-sniffing)
  *   FR-012 â€” SEQ rolling counter
  */
 
@@ -236,7 +236,7 @@ ZTEST(gloveassist, test_seq_wraps_at_256)
 }
 
 /* ------------------------------------------------------------------ */
-/*  XOR obfuscation tests                                  FR-008      */
+/*  XOR obfuscation tests                                              */
 /* ------------------------------------------------------------------ */
 
 ZTEST(gloveassist, test_xor_roundtrip_validate)

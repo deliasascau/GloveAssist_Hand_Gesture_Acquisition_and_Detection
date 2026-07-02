@@ -33,7 +33,7 @@
 
 #define BENT_THRESH   65U   /* score > 65 → clearly bent      */
 #define EXT_THRESH    35U   /* score < 35 → clearly extended   */
-#define MIN_RANGE    100U   /* minimum open-fist ADC gap for profiles to be valid */
+#define MIN_RANGE    250U   /* minimum open-fist ADC gap for profiles to be valid */
 
 /* Calibration profiles */
 static uint16_t s_open[4];
@@ -42,6 +42,7 @@ static bool     s_has_profiles;
 
 /* Per-finger sticky bend state: 0 = extended, 1 = bent */
 static uint8_t  s_bent[4];
+static uint8_t  s_last_bent_mask;
 
 /* ── Internal ────────────────────────────────────────────────────────────── */
 
@@ -51,19 +52,30 @@ static uint8_t  s_bent[4];
  */
 static uint8_t finger_score(uint8_t i, uint16_t adc)
 {
-    /* Profiles valid when open ADC > fist ADC + MIN_RANGE (open=high, fist=low). */
-    if (!s_has_profiles ||
-        ((uint32_t)s_open[i] < (uint32_t)s_fist[i] + MIN_RANGE)) {
+    if (!s_has_profiles) {
         static const uint16_t s_thresh[4] = {
             FLEX_THRESH, FLEX_THRESH, FLEX_THRESH, FLEX_THRESH
         };
         return (adc < s_thresh[i]) ? 100U : 0U;
     }
 
-    /* range is negative (fist_low - open_high < 0); pos is also negative toward fist. */
-    int32_t range = (int32_t)s_fist[i] - (int32_t)s_open[i];
-    int32_t pos   = (int32_t)adc       - (int32_t)s_open[i];
-    int32_t sc    = (pos * 100) / range;
+    int32_t sc;
+    if ((uint32_t)s_open[i] >= ((uint32_t)s_fist[i] + MIN_RANGE)) {
+        /* Common divider: open ADC high, bent/fist ADC low. */
+        int32_t range = (int32_t)s_open[i] - (int32_t)s_fist[i];
+        int32_t pos   = (int32_t)s_open[i] - (int32_t)adc;
+        sc = (pos * 100) / range;
+    } else if ((uint32_t)s_fist[i] >= ((uint32_t)s_open[i] + MIN_RANGE)) {
+        /* Inverted divider or sensor mounting: open ADC low, bent/fist ADC high. */
+        int32_t range = (int32_t)s_fist[i] - (int32_t)s_open[i];
+        int32_t pos   = (int32_t)adc       - (int32_t)s_open[i];
+        sc = (pos * 100) / range;
+    } else {
+        static const uint16_t s_thresh[4] = {
+            FLEX_THRESH, FLEX_THRESH, FLEX_THRESH, FLEX_THRESH
+        };
+        return (adc < s_thresh[i]) ? 100U : 0U;
+    }
 
     if (sc < 0)   { sc = 0;   }
     if (sc > 100) { sc = 100; }
@@ -72,14 +84,24 @@ static uint8_t finger_score(uint8_t i, uint16_t adc)
 
 /* ── Public API ─────────────────────────────────────────────────────────── */
 
-void gesture_set_profiles(const uint16_t open_avg[4], const uint16_t fist_avg[4])
+bool gesture_set_profiles(const uint16_t open_avg[4], const uint16_t fist_avg[4])
 {
+    bool valid = true;
+
     for (uint8_t i = 0U; i < 4U; i++) {
         s_open[i] = open_avg[i];
         s_fist[i] = fist_avg[i];
+        uint16_t gap = (s_open[i] > s_fist[i])
+            ? (uint16_t)(s_open[i] - s_fist[i])
+            : (uint16_t)(s_fist[i] - s_open[i]);
+        if (gap < MIN_RANGE) {
+            valid = false;
+        }
     }
-    s_has_profiles = true;
+    s_has_profiles = valid;
     (void)memset(s_bent, 0, sizeof(s_bent));  /* reset sticky state */
+    s_last_bent_mask = 0U;
+    return valid;
 }
 
 bool gesture_has_profiles(void)
@@ -103,15 +125,25 @@ gesture_id_t gesture_classify(const uint16_t adc[4])
 
         bent_mask |= (uint8_t)((uint8_t)(s_bent[i] != 0U) << i);
     }
+    s_last_bent_mask = bent_mask;
 
     switch (bent_mask) {
-    case 0x0FU: return GESTURE_HELP;   /* all 4 bent */
-    case 0x07U: return GESTURE_FOOD;   /* index+middle+ring bent */
-    case 0x03U: return GESTURE_WC;     /* index+middle bent */
-    case 0x01U: return GESTURE_WATER;  /* index only bent */
+    case 0x0FU: return GESTURE_HELP;   /* all 4 bent / fist */
+    case 0x07U: /* index+middle+ring bent */
+        return GESTURE_FOOD;
+    case 0x03U: /* index+middle bent */
+        return GESTURE_WC;
+    case 0x01U: /* index only bent */
+    case 0x0EU: /* index raised/extended, other three bent (pointing) */
+        return GESTURE_WATER;
     case 0x00U: return GESTURE_NONE;   /* all extended */
     default:    return GESTURE_NONE;   /* unrecognized combination */
     }
+}
+
+uint8_t gesture_last_bent_mask(void)
+{
+    return s_last_bent_mask;
 }
 
 const char *gesture_name(gesture_id_t g)

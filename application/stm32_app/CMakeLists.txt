@@ -15,3 +15,8 @@ target_sources(app PRIVATE
     src/alert.c
     ../common/src/frame_protocol.c
 )
+
+target_compile_definitions(app PRIVATE
+    FRAME_SECURE_TX_ID=0x53U  # 'S' = STM32
+    FRAME_SECURE_RX_ID=0x45U  # 'E' = ESP32
+)

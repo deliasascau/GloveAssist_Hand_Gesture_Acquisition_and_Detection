@@ -1,364 +1,286 @@
-/**
- * @file unit_tests.c
- * @brief Ztest unit tests for GloveAssist transport-agnostic modules
+/*
+ * Ztest unit tests for the transport-agnostic frame protocol.
  *
- * Modules under test (no hardware drivers required):
- *   - frame_protocol.c : crc8_ccitt(), frame_build(), frame_validate()
- *
- * Build target: native_sim
+ * Build target:
  *   west build -b native_sim tests/
- *
- * Requirements covered:
- *   FR-007 â€” UART CRC frame integrity
- *   FR-008 â€” XOR obfuscation (anti-sniffing)
- *   FR-012 â€” SEQ rolling counter
  */
 
 #include <zephyr/ztest.h>
 #include <string.h>
+
 #include "frame_protocol.h"
-#include "app_config.h"
-#include "common_types.h"
-#include "error_codes.h"
 
-/*
- * crc8_ccitt() is defined in frame_protocol.c; not exposed in the public header
- * (internal implementation detail). White-box declared here for direct testing.
- */
-extern uint8_t crc8_ccitt(const uint8_t *data, uint32_t length);
-
-/* ------------------------------------------------------------------ */
-/*  CRC-8/CCITT tests  (poly=0x07, init=0x00)             FR-007      */
-/* ------------------------------------------------------------------ */
-
-ZTEST(gloveassist, test_crc8_known_vector)
+static void before_each(void *fixture)
 {
-    /* Published check value for "123456789" with CRC-8/CCITT is 0xF4 */
-    const uint8_t data[] = {0x31U, 0x32U, 0x33U, 0x34U, 0x35U,
-                             0x36U, 0x37U, 0x38U, 0x39U};
-    uint8_t crc = crc8_ccitt(data, 9U);
-    zassert_equal(crc, 0xF4U, "CRC-8 check vector mismatch: got 0x%02X", crc);
+    (void)fixture;
+    frame_secure_reset_session();
 }
 
-ZTEST(gloveassist, test_crc8_single_zero_byte)
+ZTEST(gloveassist, test_frame_sizes_match_wire_format)
 {
-    const uint8_t data[] = {0x00U};
-    uint8_t crc = crc8_ccitt(data, 1U);
-    zassert_equal(crc, 0x00U, "CRC-8 of 0x00 should be 0x00");
+    zassert_equal(sizeof(frame_t), (size_t)FRAME_SIZE,
+                  "frame_t size mismatch");
+    zassert_equal((uint32_t)FRAME_SIZE, 15U,
+                  "base frame must be 15 bytes");
+
+    zassert_equal(sizeof(frame_hmac_t), (size_t)FRAME_HMAC_SIZE,
+                  "frame_hmac_t size mismatch");
+    zassert_equal((uint32_t)FRAME_HMAC_SIZE, 23U,
+                  "secure frame must be 23 bytes");
 }
 
-ZTEST(gloveassist, test_crc8_different_data_differ)
+ZTEST(gloveassist, test_crc8_maxim_known_vector)
 {
-    const uint8_t dataA[] = {0xAAU, 0xBBU};
-    const uint8_t dataB[] = {0xAAU, 0xBCU};  /* 1 bit different */
-    uint8_t crcA = crc8_ccitt(dataA, 2U);
-    uint8_t crcB = crc8_ccitt(dataB, 2U);
-    zassert_not_equal(crcA, crcB, "Different data must produce different CRC");
+    static const uint8_t data[] = {
+        '1', '2', '3', '4', '5', '6', '7', '8', '9'
+    };
+
+    zassert_equal(frame_crc8(data, (uint8_t)sizeof(data)), 0xA1U,
+                  "CRC-8/MAXIM check vector mismatch");
+    zassert_equal(frame_crc8(NULL, 9U), 0U,
+                  "NULL CRC input should return 0");
 }
 
-ZTEST(gloveassist, test_crc8_deterministic)
+ZTEST(gloveassist, test_sensor_payload_roundtrip)
 {
-    /* Same input must always yield the same CRC (no state leakage) */
-    const uint8_t data[] = {0x01U, 0x07U, 0xAAU, 0x5AU, 0xFFU};
-    uint8_t crc1 = crc8_ccitt(data, sizeof(data));
-    uint8_t crc2 = crc8_ccitt(data, sizeof(data));
-    zassert_equal(crc1, crc2, "CRC-8 must be deterministic");
+    uint8_t payload[FRAME_PAYLOAD_LEN];
+    uint16_t index;
+    uint16_t middle;
+    uint16_t ring;
+    uint16_t pinky;
+
+    frame_make_sensor_payload(payload, 123U, 1024U, 2048U, 4095U);
+    frame_decode_sensor_payload(payload, &index, &middle, &ring, &pinky);
+
+    zassert_equal(index, 123U, "index payload mismatch");
+    zassert_equal(middle, 1024U, "middle payload mismatch");
+    zassert_equal(ring, 2048U, "ring payload mismatch");
+    zassert_equal(pinky, 4095U, "pinky payload mismatch");
 }
 
-/* ------------------------------------------------------------------ */
-/*  frame_build() tests                                           */
-/* ------------------------------------------------------------------ */
-
-ZTEST(gloveassist, test_frame_build_null_frame)
+ZTEST(gloveassist, test_command_and_status_payload_helpers)
 {
-    int32_t ret = frame_build(NULL, MSG_TYPE_POLL, NULL, 0U);
-    zassert_true(ret < 0, "NULL frame pointer must return error");
-}
+    uint8_t payload[FRAME_PAYLOAD_LEN];
 
-ZTEST(gloveassist, test_frame_build_poll_sof)
-{
-    glove_frame_t frame;
-    int32_t ret = frame_build(&frame, MSG_TYPE_POLL, NULL, 0U);
-    zassert_equal(ret, 0, "Poll frame build failed");
-    zassert_equal(frame.sof, (uint8_t)PROTO_SOF,
-                  "SOF must always be 0x%02X", PROTO_SOF);
-    zassert_equal(frame.type, (uint8_t)MSG_TYPE_POLL, "Type field mismatch");
-}
+    frame_make_cmd_payload(payload, (uint8_t)CMD_OLED_TEXT, 7U, "HELLO!");
+    zassert_equal(payload[0], (uint8_t)CMD_OLED_TEXT, "command mismatch");
+    zassert_equal(payload[1], 7U, "arg0 mismatch");
+    zassert_equal(0, memcmp(&payload[2], "HELLO!", 6U),
+                  "text payload mismatch");
 
-ZTEST(gloveassist, test_frame_build_sets_correct_type)
-{
-    glove_frame_t frame;
-    frame_build(&frame, MSG_TYPE_GESTURE, NULL, 0U);
-    zassert_equal(frame.type, (uint8_t)MSG_TYPE_GESTURE,
-                  "Type not stored correctly");
-}
-
-ZTEST(gloveassist, test_frame_size_is_12_bytes)
-{
-    /* _Static_assert in frame_protocol.h already checks this at compile time */
-    zassert_equal(sizeof(glove_frame_t), (size_t)PROTO_FRAME_SIZE,
-                  "glove_frame_t must be %u bytes, got %u",
-                  PROTO_FRAME_SIZE, sizeof(glove_frame_t));
-}
-
-/* ------------------------------------------------------------------ */
-/*  frame_validate() round-trip tests                  FR-007     */
-/* ------------------------------------------------------------------ */
-
-ZTEST(gloveassist, test_frame_roundtrip_gesture)
-{
-    glove_frame_t frame;
-    uint8_t payload[PROTO_PAYLOAD_SIZE] = {10U, 20U, 30U, 40U,
-                                            50U, 60U, 70U, 80U};
-
-    int32_t ret = frame_build(&frame, MSG_TYPE_GESTURE,
-                                  payload, (uint8_t)PROTO_PAYLOAD_SIZE);
-    zassert_equal(ret, 0, "Frame build failed");
-
-    int32_t valid = frame_validate(&frame);
-    zassert_equal(valid, 0,
-                  "Freshly built frame must pass validation (got %d)", valid);
-}
-
-ZTEST(gloveassist, test_frame_roundtrip_heartbeat)
-{
-    glove_frame_t frame;
-    int32_t ret = frame_build(&frame, MSG_TYPE_HEARTBEAT, NULL, 0U);
-    zassert_equal(ret, 0, "Heartbeat frame build failed");
-    zassert_equal(frame_validate(&frame), 0,
-                  "Heartbeat validation failed");
-}
-
-ZTEST(gloveassist, test_frame_roundtrip_sensor_data)
-{
-    glove_frame_t frame;
-    frame_sensor_payload_t pkt;
-    (void)memset(&pkt, 0, sizeof(pkt));
-    pkt.flex[0]      = 200U;
-    pkt.flex[1]      = 128U;
-    pkt.flex[2]      = 64U;
-    pkt.flex[3]      = 10U;
-    pkt.gesture_id   = GESTURE_FIST;
-    pkt.confidence   = 90U;
-    pkt.status_flags = 0U;
-    pkt.reserved     = 0U;
-
-    int32_t ret = frame_build(&frame, MSG_TYPE_SENSOR_DATA,
-                                  (const uint8_t *)&pkt,
-                                  (uint8_t)sizeof(pkt));
-    zassert_equal(ret, 0, "Sensor data frame build failed");
-    zassert_equal(frame_validate(&frame), 0,
-                  "Sensor data frame validation failed");
-}
-
-ZTEST(gloveassist, test_frame_corrupted_crc_fails)
-{
-    glove_frame_t frame;
-    uint8_t payload[PROTO_PAYLOAD_SIZE] = {1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U};
-    frame_build(&frame, MSG_TYPE_SENSOR_DATA, payload,
-                    (uint8_t)PROTO_PAYLOAD_SIZE);
-
-    frame.crc8 ^= 0xFFU;  /* flip all CRC bits â€” guaranteed mismatch */
-
-    int32_t valid = frame_validate(&frame);
-    zassert_not_equal(valid, 0, "Corrupted CRC must fail validation");
-}
-
-ZTEST(gloveassist, test_frame_corrupted_payload_fails)
-{
-    glove_frame_t frame;
-    uint8_t payload[PROTO_PAYLOAD_SIZE] = {0xAAU, 0xBBU, 0xCCU, 0xDDU,
-                                            0xEEU, 0xFFU, 0x11U, 0x22U};
-    frame_build(&frame, MSG_TYPE_SENSOR_DATA, payload,
-                    (uint8_t)PROTO_PAYLOAD_SIZE);
-
-    frame.payload[0] ^= 0x01U;  /* flip 1 bit in wire payload */
-
-    int32_t valid = frame_validate(&frame);
-    zassert_not_equal(valid, 0, "Payload bit-flip must fail CRC validation");
-}
-
-ZTEST(gloveassist, test_frame_wrong_sof_fails)
-{
-    glove_frame_t frame;
-    frame_build(&frame, MSG_TYPE_POLL, NULL, 0U);
-    frame.sof = 0x00U;  /* corrupt SOF */
-
-    int32_t valid = frame_validate(&frame);
-    zassert_not_equal(valid, 0, "Wrong SOF must fail validation");
-}
-
-ZTEST(gloveassist, test_frame_corrupted_type_fails)
-{
-    glove_frame_t frame;
-    frame_build(&frame, MSG_TYPE_GESTURE, NULL, 0U);
-    /* Corrupt TYPE after build â€” CRC was computed over the original type */
-    frame.type = MSG_TYPE_HONEYPOT;
-
-    int32_t valid = frame_validate(&frame);
-    zassert_not_equal(valid, 0,
-                      "Corrupted TYPE field must fail CRC validation");
-}
-
-/* ------------------------------------------------------------------ */
-/*  SEQ rolling counter tests                              FR-012      */
-/* ------------------------------------------------------------------ */
-
-ZTEST(gloveassist, test_seq_increments_per_frame)
-{
-    glove_frame_t frameA, frameB;
-    frame_build(&frameA, MSG_TYPE_POLL, NULL, 0U);
-    frame_build(&frameB, MSG_TYPE_POLL, NULL, 0U);
-    zassert_not_equal(frameA.seq, frameB.seq,
-                      "SEQ counter must increment between consecutive builds");
-}
-
-ZTEST(gloveassist, test_seq_wraps_at_256)
-{
-    /*
-     * Drive the counter through a full 256-cycle wrap.
-     * 256 builds after recording the baseline must land on the same SEQ.
-     */
-    glove_frame_t f;
-    uint8_t first_seq;
-    uint32_t i;
-
-    frame_build(&f, MSG_TYPE_POLL, NULL, 0U);
-    first_seq = f.seq;
-
-    for (i = 0U; i < 255U; i++) {
-        frame_build(&f, MSG_TYPE_POLL, NULL, 0U);
-    }
-
-    frame_build(&f, MSG_TYPE_POLL, NULL, 0U);
-    zassert_equal(f.seq, first_seq,
-                  "SEQ must wrap: expected %u got %u", first_seq, f.seq);
-}
-
-/* ------------------------------------------------------------------ */
-/*  XOR obfuscation tests                                  FR-008      */
-/* ------------------------------------------------------------------ */
-
-ZTEST(gloveassist, test_xor_roundtrip_validate)
-{
-    /*
-     * frame_build() XOR-obfuscates the payload on the wire.
-     * frame_validate() reverses the XOR and checks the CRC.
-     * A freshly built frame must always pass validation.
-     */
-    glove_frame_t frame;
-    const uint8_t original[PROTO_PAYLOAD_SIZE] =
-        {0x80U, 0x60U, 0x40U, 0x20U, 0x06U, 0x64U, 0x00U, 0xFFU};
-
-    (void)frame_build(&frame, MSG_TYPE_GESTURE, original,
-                          (uint8_t)PROTO_PAYLOAD_SIZE);
-
-    int32_t ret = frame_validate(&frame);
-    zassert_equal(ret, 0, "XOR encodeâ†’decode round-trip failed: %d", ret);
-}
-
-ZTEST(gloveassist, test_xor_wire_differs_from_plaintext)
-{
-    /*
-     * For a non-zero XOR key (SEQ ^ 0x5A != 0), at least one wire byte
-     * must differ from the original plaintext.
-     * Using 0xFF payload maximises probability of visible XOR change.
-     */
-    glove_frame_t frame;
-    uint8_t plaintext[PROTO_PAYLOAD_SIZE];
-    uint32_t i;
-    uint32_t differences = 0U;
-
-    (void)memset(plaintext, 0xFFU, sizeof(plaintext));
-    frame_build(&frame, MSG_TYPE_SENSOR_DATA, plaintext,
-                    (uint8_t)PROTO_PAYLOAD_SIZE);
-
-    for (i = 0U; i < (uint32_t)PROTO_PAYLOAD_SIZE; i++) {
-        if (frame.payload[i] != plaintext[i]) {
-            differences++;
-        }
-    }
-
-    /* Edge case: key == 0 when SEQ == PROTO_XOR_KEY_BASE. Skip assert then. */
-    uint8_t xor_key = (uint8_t)(frame.seq ^ (uint8_t)PROTO_XOR_KEY_BASE);
-    if (xor_key != 0U) {
-        zassert_true(differences > 0U,
-                     "Non-zero XOR key must change at least one wire byte");
+    frame_make_status_payload(payload, (uint8_t)STATUS_ACK, 42U);
+    zassert_equal(payload[0], (uint8_t)STATUS_ACK, "status mismatch");
+    zassert_equal(payload[1], 42U, "status seq mismatch");
+    for (uint8_t i = 2U; i < FRAME_PAYLOAD_LEN; i++) {
+        zassert_equal(payload[i], 0U, "status payload tail must be zero");
     }
 }
 
-ZTEST(gloveassist, test_xor_corruption_detected)
+ZTEST(gloveassist, test_base_frame_build_validate_and_parse)
 {
-    /* Flip a single wire bit in the obfuscated payload â€” CRC must catch it */
-    glove_frame_t frame;
-    frame_build(&frame, MSG_TYPE_GESTURE, NULL, 0U);
-    frame.payload[0] ^= 0xFFU;  /* corrupt one wire byte */
+    uint8_t payload[FRAME_PAYLOAD_LEN] = {
+        0x10U, 0x20U, 0x30U, 0x40U, 0x50U, 0x60U, 0x70U, 0x80U
+    };
+    frame_t frame;
+    frame_t parsed;
+    frame_parser_t parser;
+    int ret;
 
-    int32_t ret = frame_validate(&frame);
-    zassert_not_equal(ret, 0,
-                      "Wire corruption must be detected by CRC");
+    zassert_equal(frame_build(NULL, (uint8_t)FRAME_TYPE_STATUS, 1U, payload),
+                  -1, "NULL frame should fail");
+    zassert_equal(frame_build(&frame, (uint8_t)FRAME_TYPE_STATUS, 1U, NULL),
+                  -1, "NULL payload should fail");
+
+    ret = frame_build(&frame, (uint8_t)FRAME_TYPE_STATUS, 1U, payload);
+    zassert_equal(ret, 0, "base frame build failed");
+    zassert_equal(frame.sof, (uint8_t)FRAME_SOF, "SOF mismatch");
+    zassert_equal(frame.type, (uint8_t)FRAME_TYPE_STATUS, "type mismatch");
+    zassert_equal(frame.seq, 1U, "seq mismatch");
+    zassert_equal(frame_get_counter(&frame), 0U, "base counter must be zero");
+    zassert_equal(0, memcmp(frame.payload, payload, FRAME_PAYLOAD_LEN),
+                  "base payload mismatch");
+    zassert_equal(frame_validate(&frame), 0, "base frame validate failed");
+
+    frame_parser_init(&parser);
+    zassert_equal(frame_parser_push_byte(&parser, 0x55U, &parsed), 0,
+                  "noise before SOF should be ignored");
+    const uint8_t *wire = (const uint8_t *)&frame;
+    for (uint8_t i = 0U; i < FRAME_SIZE; i++) {
+        ret = frame_parser_push_byte(&parser, wire[i], &parsed);
+        zassert_equal(ret, (i == (FRAME_SIZE - 1U)) ? 1 : 0,
+                      "parser returned unexpected state at byte %u", i);
+    }
+    zassert_equal(0, memcmp(&parsed, &frame, FRAME_SIZE),
+                  "parsed base frame mismatch");
 }
 
-/* ------------------------------------------------------------------ */
-/*  Payload struct sizing checks                           FR-007      */
-/* ------------------------------------------------------------------ */
-
-ZTEST(gloveassist, test_sensor_payload_size_fits_frame)
+ZTEST(gloveassist, test_session_frame_is_hmac_authenticated)
 {
-    zassert_equal(sizeof(frame_sensor_payload_t), (size_t)PROTO_PAYLOAD_SIZE,
-                  "frame_sensor_payload_t size %u != PROTO_PAYLOAD_SIZE %u",
-                  sizeof(frame_sensor_payload_t), PROTO_PAYLOAD_SIZE);
+    frame_hmac_t session;
+
+    zassert_false(frame_secure_session_ready(),
+                  "session should start unavailable");
+    zassert_equal(frame_build_session(NULL, 1U, (uint8_t)SESSION_HELLO,
+                                      0x12345678UL),
+                  -1, "NULL session frame should fail");
+    zassert_equal(frame_build_session(&session, 1U, (uint8_t)SESSION_HELLO, 0U),
+                  -1, "zero session nonce should fail");
+
+    zassert_equal(frame_build_session(&session, 1U, (uint8_t)SESSION_HELLO,
+                                      0x12345678UL),
+                  0, "session frame build failed");
+    zassert_equal(session.base.type, (uint8_t)FRAME_TYPE_SESSION,
+                  "session frame type mismatch");
+    zassert_equal(session.base.payload[0], (uint8_t)SESSION_HELLO,
+                  "session message mismatch");
+    zassert_equal(frame_get_counter(&session.base), 0x12345678UL,
+                  "session nonce mismatch");
+    zassert_equal(frame_validate_hmac(&session), 0,
+                  "session HMAC validation failed");
 }
 
-ZTEST(gloveassist, test_heartbeat_payload_size_fits_frame)
+ZTEST(gloveassist, test_hmac_frame_requires_ready_session)
 {
-    zassert_equal(sizeof(frame_heartbeat_payload_t), (size_t)PROTO_PAYLOAD_SIZE,
-                  "frame_heartbeat_payload_t size %u != PROTO_PAYLOAD_SIZE %u",
-                  sizeof(frame_heartbeat_payload_t), PROTO_PAYLOAD_SIZE);
+    uint8_t payload[FRAME_PAYLOAD_LEN] = {0U};
+    frame_hmac_t frame;
+
+    zassert_equal(frame_build_hmac(&frame, (uint8_t)FRAME_TYPE_STATUS,
+                                   1U, payload),
+                  -1, "secure frame should require negotiated session");
+
+    frame_secure_set_session(0xCAFEBABEU);
+    zassert_true(frame_secure_session_ready(), "session should be ready");
+    zassert_equal(frame_build_hmac(NULL, (uint8_t)FRAME_TYPE_STATUS,
+                                   1U, payload),
+                  -1, "NULL secure frame should fail");
+    zassert_equal(frame_build_hmac(&frame, (uint8_t)FRAME_TYPE_SESSION,
+                                   1U, payload),
+                  -1, "session type must use frame_build_session()");
 }
 
-/* ------------------------------------------------------------------ */
-/*  ADC & protocol constants sanity checks                            */
-/* ------------------------------------------------------------------ */
-
-ZTEST(gloveassist, test_adc_min_less_than_max)
+ZTEST(gloveassist, test_hmac_roundtrip_encrypts_and_decrypts_payload)
 {
-    zassert_true((uint32_t)ADC_MIN_VALID < (uint32_t)ADC_MAX_VALID,
-                 "ADC_MIN_VALID (%u) must be < ADC_MAX_VALID (%u)",
-                 ADC_MIN_VALID, ADC_MAX_VALID);
+    uint8_t payload[FRAME_PAYLOAD_LEN] = {
+        0xA0U, 0xA1U, 0xA2U, 0xA3U, 0xA4U, 0xA5U, 0xA6U, 0xA7U
+    };
+    frame_hmac_t frame;
+
+    frame_secure_set_session(0x01020304UL);
+
+    zassert_equal(frame_build_hmac(&frame, (uint8_t)FRAME_TYPE_COMMAND,
+                                   17U, payload),
+                  0, "secure frame build failed");
+    zassert_equal(frame.base.sof, (uint8_t)FRAME_SOF, "SOF mismatch");
+    zassert_equal(frame.base.type, (uint8_t)FRAME_TYPE_COMMAND,
+                  "secure frame type mismatch");
+    zassert_equal(frame.base.seq, 17U, "secure frame seq mismatch");
+    zassert_equal(frame_get_counter(&frame.base), 1U,
+                  "first secure frame counter should be 1");
+    zassert_not_equal(memcmp(frame.base.payload, payload, FRAME_PAYLOAD_LEN), 0,
+                      "wire payload should be encrypted");
+
+    zassert_equal(frame_validate_hmac(&frame), 0,
+                  "secure frame validation failed");
+    zassert_equal(0, memcmp(frame.base.payload, payload, FRAME_PAYLOAD_LEN),
+                  "secure payload was not decrypted correctly");
 }
 
-ZTEST(gloveassist, test_adc_thresholds_within_12bit)
+ZTEST(gloveassist, test_hmac_rejects_tag_and_payload_tamper)
 {
-    zassert_true((uint32_t)ADC_MAX_VALID <= 4095U,
-                 "ADC_MAX_VALID (%u) exceeds 12-bit range", ADC_MAX_VALID);
+    uint8_t payload[FRAME_PAYLOAD_LEN] = {
+        1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U
+    };
+    frame_hmac_t frame;
+
+    frame_secure_set_session(0x55667788UL);
+    zassert_equal(frame_build_hmac(&frame, (uint8_t)FRAME_TYPE_SENSOR_RAW,
+                                   9U, payload),
+                  0, "secure frame build failed");
+    frame.tag[0] ^= 0x01U;
+    zassert_equal(frame_validate_hmac(&frame), -1,
+                  "tag tamper should be rejected");
+
+    frame_secure_set_session(0x55667788UL);
+    zassert_equal(frame_build_hmac(&frame, (uint8_t)FRAME_TYPE_SENSOR_RAW,
+                                   9U, payload),
+                  0, "secure frame build failed");
+    frame.base.payload[0] ^= 0x01U;
+    zassert_equal(frame_validate_hmac(&frame), -1,
+                  "ciphertext tamper should be rejected");
 }
 
-ZTEST(gloveassist, test_gesture_thresholds_consistent)
+ZTEST(gloveassist, test_hmac_replay_is_rejected)
 {
-    /* Senzor flex: valoarea ADC SCADE la indoire → BENT < OPEN (fizic corect) */
-    zassert_true((uint32_t)GESTURE_THRESHOLD_BENT <
-                 (uint32_t)GESTURE_THRESHOLD_OPEN,
-                 "THRESHOLD_BENT (%u) must be < THRESHOLD_OPEN (%u)",
-                 GESTURE_THRESHOLD_BENT, GESTURE_THRESHOLD_OPEN);
+    uint8_t payload[FRAME_PAYLOAD_LEN] = {
+        9U, 8U, 7U, 6U, 5U, 4U, 3U, 2U
+    };
+    frame_hmac_t wire1;
+    frame_hmac_t wire2;
+
+    frame_secure_set_session(0x0A0B0C0DUL);
+    zassert_equal(frame_build_hmac(&wire1, (uint8_t)FRAME_TYPE_HEARTBEAT,
+                                   2U, payload),
+                  0, "secure frame build failed");
+    wire2 = wire1;
+
+    zassert_equal(frame_validate_hmac(&wire1), 0,
+                  "first secure frame should validate");
+    zassert_equal(frame_validate_hmac(&wire2), -1,
+                  "replayed secure frame should be rejected");
 }
 
-ZTEST(gloveassist, test_heartbeat_timeout_greater_than_interval)
+ZTEST(gloveassist, test_hmac_streaming_parser)
 {
-    zassert_true((uint32_t)HEARTBEAT_TIMEOUT_MS >
-                 (uint32_t)HEARTBEAT_INTERVAL_MS,
-                 "Timeout (%u ms) must exceed interval (%u ms)",
-                 HEARTBEAT_TIMEOUT_MS, HEARTBEAT_INTERVAL_MS);
+    uint8_t payload[FRAME_PAYLOAD_LEN] = {
+        0x42U, 0x43U, 0x44U, 0x45U, 0x46U, 0x47U, 0x48U, 0x49U
+    };
+    frame_hmac_t frame;
+    frame_hmac_t parsed;
+    frame_hmac_parser_t parser;
+    int ret;
+
+    frame_secure_set_session(0x11223344UL);
+    zassert_equal(frame_build_hmac(&frame, (uint8_t)FRAME_TYPE_STATUS,
+                                   3U, payload),
+                  0, "secure frame build failed");
+
+    frame_hmac_parser_init(&parser);
+    zassert_equal(frame_hmac_parser_push_byte(&parser, 0x00U, &parsed), 0,
+                  "noise before SOF should be ignored");
+
+    const uint8_t *wire = (const uint8_t *)&frame;
+    for (uint8_t i = 0U; i < FRAME_HMAC_SIZE; i++) {
+        ret = frame_hmac_parser_push_byte(&parser, wire[i], &parsed);
+        zassert_equal(ret, (i == (FRAME_HMAC_SIZE - 1U)) ? 1 : 0,
+                      "HMAC parser returned unexpected state at byte %u", i);
+    }
+    zassert_equal(parsed.base.type, (uint8_t)FRAME_TYPE_STATUS,
+                  "parsed secure type mismatch");
+    zassert_equal(0, memcmp(parsed.base.payload, payload, FRAME_PAYLOAD_LEN),
+                  "parsed secure payload mismatch");
 }
 
-ZTEST(gloveassist, test_proto_frame_size_is_12)
+ZTEST(gloveassist, test_hmac_parser_rejects_bad_frame)
 {
-    /* SOF(1)+TYPE(1)+SEQ(1)+PAYLOAD(8)+CRC8(1) = 12 */
-    zassert_equal((uint32_t)PROTO_FRAME_SIZE, 12U,
-                  "PROTO_FRAME_SIZE must be 12, got %u", PROTO_FRAME_SIZE);
+    uint8_t payload[FRAME_PAYLOAD_LEN] = {0U};
+    frame_hmac_t frame;
+    frame_hmac_t parsed;
+    frame_hmac_parser_t parser;
+    int ret = 0;
+
+    frame_secure_set_session(0x99887766UL);
+    zassert_equal(frame_build_hmac(&frame, (uint8_t)FRAME_TYPE_STATUS,
+                                   4U, payload),
+                  0, "secure frame build failed");
+    frame.tag[FRAME_HMAC_TAG_LEN - 1U] ^= 0x80U;
+
+    frame_hmac_parser_init(&parser);
+    const uint8_t *wire = (const uint8_t *)&frame;
+    for (uint8_t i = 0U; i < FRAME_HMAC_SIZE; i++) {
+        ret = frame_hmac_parser_push_byte(&parser, wire[i], &parsed);
+    }
+
+    zassert_equal(ret, -2, "bad HMAC frame should be rejected by parser");
 }
 
-/* ------------------------------------------------------------------ */
-/*  Test suite registration                                            */
-/* ------------------------------------------------------------------ */
-ZTEST_SUITE(gloveassist, NULL, NULL, NULL, NULL, NULL);
+ZTEST_SUITE(gloveassist, NULL, NULL, before_each, NULL, NULL);

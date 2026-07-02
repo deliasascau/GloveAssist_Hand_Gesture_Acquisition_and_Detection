@@ -4,7 +4,7 @@
  *
  * STM32F103 responsibilities:
  *   - ADC acquisition (4 flex sensors)
- *   - Gesture classification (rule-based + TinyML fallback)
+ *   - Gesture classification (rule-based)
  *   - UART communication to ESP32 (USART1: PA9 TX, PA10 RX @ 115200 baud)
  *   - OLED display (SSD1306 via I2C2)
  *   - Haptic feedback (motor TIM4_CH1 PB6, active buzzer GPIO PB4)

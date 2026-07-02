@@ -18,6 +18,11 @@ int uart_stm32_init(void);
 int uart_stm32_poll_byte(uint8_t *b);
 
 /**
+ * @brief Send HMAC-only SESSION_HELLO to STM32.
+ */
+void uart_stm32_send_session_hello(uint32_t session_nonce);
+
+/**
  * @brief Send a STATUS_ACK frame to STM32 mirroring the received SEQ.
  * @param seq  Sequence number from the received frame.
  */
