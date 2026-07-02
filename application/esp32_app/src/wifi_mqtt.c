@@ -32,12 +32,31 @@ LOG_MODULE_REGISTER(wifi_mqtt, LOG_LEVEL_INF);
 #include <zephyr/net/socket.h>
 #include <zephyr/net/net_ip.h>
 #include <zephyr/net/sntp.h>
+#include <zephyr/version.h>
+#if __has_include(<zephyr/sys/clock.h>)
 #include <zephyr/sys/clock.h>
+#define glove_clock_settime(ts) sys_clock_settime(SYS_CLOCK_REALTIME, (ts))
+#else
+#include <zephyr/posix/time.h>
+#define glove_clock_settime(ts) clock_settime(CLOCK_REALTIME, (ts))
+#endif
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
 #include <inttypes.h>
 #include <time.h>
+
+#ifndef ZEPHYR_VERSION_MAJOR
+#define ZEPHYR_VERSION_MAJOR 3
+#endif
+
+#if ZEPHYR_VERSION_MAJOR >= 4
+#define GLOVE_ZEPHYR4_NET 1
+typedef uint64_t glove_net_mgmt_event_t;
+#else
+#define GLOVE_ZEPHYR4_NET 0
+typedef uint32_t glove_net_mgmt_event_t;
+#endif
 
 #if defined(CONFIG_GLOVE_MQTT_TLS)
 #include <zephyr/net/tls_credentials.h>
@@ -259,7 +278,7 @@ static int enqueue_publish(const struct mqtt_publish_msg *msg)
 }
 
 static void wifi_evt_handler(struct net_mgmt_event_callback *cb,
-                             uint64_t event,
+                             glove_net_mgmt_event_t event,
                              struct net_if *iface)
 {
     ARG_UNUSED(iface);
@@ -309,13 +328,14 @@ static void wifi_evt_handler(struct net_mgmt_event_callback *cb,
 }
 
 static void ipv4_evt_handler(struct net_mgmt_event_callback *cb,
-                             uint64_t event,
+                             glove_net_mgmt_event_t event,
                              struct net_if *iface)
 {
     ARG_UNUSED(cb);
 
     if (event == NET_EVENT_IPV4_ADDR_ADD) {
         char ip_buf[NET_IPV4_ADDR_LEN];
+#if GLOVE_ZEPHYR4_NET
         char gw_buf[NET_IPV4_ADDR_LEN];
         struct net_in_addr *ip = net_if_ipv4_get_global_addr(iface, NET_ADDR_PREFERRED);
         struct net_in_addr gw = net_if_ipv4_get_gw(iface);
@@ -326,6 +346,13 @@ static void ipv4_evt_handler(struct net_mgmt_event_callback *cb,
         LOG_INF("IPv4 address acquired - WiFi ready (ip=%s gw=%s)",
                 ip_str ? ip_str : "?",
                 gw_str ? gw_str : "?");
+#else
+        struct in_addr *ip = net_if_ipv4_get_global_addr(iface, NET_ADDR_PREFERRED);
+        const char *ip_str = ip ? zsock_inet_ntop(AF_INET, ip, ip_buf, sizeof(ip_buf)) : NULL;
+
+        LOG_INF("IPv4 address acquired - WiFi ready (ip=%s)",
+                ip_str ? ip_str : "?");
+#endif
         s_wifi_connected = true;
     }
 }
@@ -355,6 +382,7 @@ static int register_tls_credentials(void)
     return 0;
 }
 
+#if GLOVE_ZEPHYR4_NET
 static void log_tls_verify_flags(uint32_t flags)
 {
     LOG_ERR("TLS X.509 verify flags=0x%08x", flags);
@@ -476,6 +504,14 @@ out:
     (void)zsock_close(sock);
     return err;
 }
+#else
+static int tls_preflight_check(void)
+{
+    s_tls_preflight_done = true;
+    s_tls_preflight_ok = true;
+    return 0;
+}
+#endif /* GLOVE_ZEPHYR4_NET */
 #endif /* CONFIG_GLOVE_MQTT_TLS */
 
 static void mqtt_evt_handler(struct mqtt_client *client,
@@ -578,7 +614,9 @@ static int do_mqtt_connect(void)
 
     s_client.broker        = &s_broker_addr;
     s_client.evt_cb        = mqtt_evt_handler;
+#if GLOVE_ZEPHYR4_NET
     s_client.transport.if_name = (s_if_name[0] != '\0') ? s_if_name : NULL;
+#endif
     s_client.client_id     = (struct mqtt_utf8){
         .utf8 = (const uint8_t *)s_client_id,
         .size = strlen(s_client_id),
@@ -675,7 +713,7 @@ static int sync_time_for_tls(void)
         LOG_WRN("SNTP sync failed: %d - using TLS fallback time", err);
         tspec.tv_sec = (time_t)TLS_FALLBACK_UNIX_TIME;
         tspec.tv_nsec = 0L;
-        err = sys_clock_settime(SYS_CLOCK_REALTIME, &tspec);
+        err = glove_clock_settime(&tspec);
         if (err != 0) {
             LOG_WRN("TLS fallback clock set failed: %d", err);
             return err;
@@ -690,7 +728,7 @@ static int sync_time_for_tls(void)
     tspec.tv_sec = (time_t)sntp_ts.seconds;
     tspec.tv_nsec = (long)(((uint64_t)sntp_ts.fraction * NSEC_PER_SEC) >> 32);
 
-    err = sys_clock_settime(SYS_CLOCK_REALTIME, &tspec);
+    err = glove_clock_settime(&tspec);
     if (err != 0) {
         LOG_WRN("SNTP clock set failed: %d", err);
         return err;

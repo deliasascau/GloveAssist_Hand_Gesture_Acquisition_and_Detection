@@ -29,6 +29,10 @@
 	pinctrl-names = "default";
 };
 
+&wifi {
+	status = "okay";
+};
+
 /*
  * Emergency GPIO backup channel (UART fallback).
  *   GPIO18: ALERT_IN  <- STM32 PB0 (output)

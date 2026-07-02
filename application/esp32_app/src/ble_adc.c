@@ -18,6 +18,10 @@
 #include "gesture.h"
 #include "wifi_mqtt.h"
 
+#ifndef BT_LE_ADV_OPT_CONN
+#define BT_LE_ADV_OPT_CONN BT_LE_ADV_OPT_CONNECTABLE
+#endif
+
 LOG_MODULE_REGISTER(ble_adc, LOG_LEVEL_INF);
 
 /* Last confirmed gesture — set by main, read by rx_write. */

@@ -83,6 +83,9 @@ jobs:
       - name: Install Zephyr Python requirements
         run: pip3 install -r $ZEPHYR_BASE/scripts/requirements.txt
 
+      - name: Fetch ESP32 RF blobs
+        run: west blobs fetch hal_espressif
+
       - name: Install Zephyr SDK (Xtensa ESP32)
         run: |
           wget -q https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v${SDK_VER}/zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz -P /opt

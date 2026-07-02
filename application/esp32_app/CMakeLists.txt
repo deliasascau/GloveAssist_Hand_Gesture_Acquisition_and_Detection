@@ -4,6 +4,21 @@ cmake_minimum_required(VERSION 3.20.0)
 # cross-build, so disable that host-only package lookup for quieter CMake.
 set(CMAKE_DISABLE_FIND_PACKAGE_Threads TRUE CACHE BOOL "" FORCE)
 
+set(GLOVE_ZEPHYR_VERSION_FILE $ENV{ZEPHYR_BASE}/VERSION)
+if(EXISTS "${GLOVE_ZEPHYR_VERSION_FILE}")
+    file(STRINGS "${GLOVE_ZEPHYR_VERSION_FILE}" GLOVE_ZEPHYR_MAJOR_LINE
+         REGEX "^VERSION_MAJOR = [0-9]+")
+    string(REGEX REPLACE "^VERSION_MAJOR = ([0-9]+).*" "\\1"
+           GLOVE_ZEPHYR_MAJOR "${GLOVE_ZEPHYR_MAJOR_LINE}")
+    if(GLOVE_ZEPHYR_MAJOR GREATER_EQUAL 4)
+        list(APPEND EXTRA_CONF_FILE
+             "${CMAKE_CURRENT_SOURCE_DIR}/prj_zephyr4.conf")
+    else()
+        list(APPEND EXTRA_CONF_FILE
+             "${CMAKE_CURRENT_SOURCE_DIR}/prj_zephyr3.conf")
+    endif()
+endif()
+
 # MQTT/WiFi stay enabled in prj.conf. Secrets are loaded only from this local
 # ignored file when present, so credentials never need to live in git.
 set(GLOVE_LOCAL_CREDENTIALS_CONF ${CMAKE_CURRENT_SOURCE_DIR}/credentials.conf)
