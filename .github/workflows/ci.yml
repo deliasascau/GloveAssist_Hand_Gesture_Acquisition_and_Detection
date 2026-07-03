@@ -29,12 +29,13 @@ jobs:
           set "GIT_CONFIG_COUNT=1"
           set "GIT_CONFIG_KEY_0=safe.directory"
           set "GIT_CONFIG_VALUE_0=*"
-          "%ZEPHYR_PYTHON%" -m west -z "%ZEPHYR_BASE%" build -p always -b stm32_min_dev@blue "%GITHUB_WORKSPACE%\application\stm32_app" --build-dir "%GITHUB_WORKSPACE%\build-stm32"
+          set "BUILD_DIR=%RUNNER_TEMP%\gloveassist-%GITHUB_RUN_ID%-%GITHUB_RUN_ATTEMPT%-build-stm32"
+          "%ZEPHYR_PYTHON%" -m west -z "%ZEPHYR_BASE%" build -p always -b stm32_min_dev@blue "%GITHUB_WORKSPACE%\application\stm32_app" --build-dir "%BUILD_DIR%"
 
       - uses: actions/upload-artifact@v4
         with:
           name: stm32-firmware
-          path: build-stm32\zephyr\zephyr.bin
+          path: ${{ runner.temp }}\gloveassist-${{ github.run_id }}-${{ github.run_attempt }}-build-stm32\zephyr\zephyr.bin
 
   build-esp32:
     name: "Build ESP32"
@@ -52,12 +53,13 @@ jobs:
           set "GIT_CONFIG_VALUE_0=*"
           set "BOARD=esp32_devkitc_wroom/esp32/procpu"
           if exist "C:\zephyr-workspace\zephyr\boards\espressif\esp32_devkitc\esp32_devkitc_procpu.yaml" set "BOARD=esp32_devkitc/esp32/procpu"
-          "%ZEPHYR_PYTHON%" -m west -z "%ZEPHYR_BASE%" build -p always -b "%BOARD%" "%GITHUB_WORKSPACE%\application\esp32_app" --build-dir "%GITHUB_WORKSPACE%\build-esp32"
+          set "BUILD_DIR=%RUNNER_TEMP%\gloveassist-%GITHUB_RUN_ID%-%GITHUB_RUN_ATTEMPT%-build-esp32"
+          "%ZEPHYR_PYTHON%" -m west -z "%ZEPHYR_BASE%" build -p always -b "%BOARD%" "%GITHUB_WORKSPACE%\application\esp32_app" --build-dir "%BUILD_DIR%"
 
       - uses: actions/upload-artifact@v4
         with:
           name: esp32-firmware
-          path: build-esp32\zephyr\zephyr.bin
+          path: ${{ runner.temp }}\gloveassist-${{ github.run_id }}-${{ github.run_attempt }}-build-esp32\zephyr\zephyr.bin
 
   unit-tests:
     name: "Unit Tests"
@@ -73,9 +75,10 @@ jobs:
           set "GIT_CONFIG_COUNT=1"
           set "GIT_CONFIG_KEY_0=safe.directory"
           set "GIT_CONFIG_VALUE_0=*"
-          "%ZEPHYR_PYTHON%" -m west -z "%ZEPHYR_BASE%" build -p always -b native_sim/native/64 "%GITHUB_WORKSPACE%\tests" --build-dir "%GITHUB_WORKSPACE%\build-tests"
+          set "BUILD_DIR=%RUNNER_TEMP%\gloveassist-%GITHUB_RUN_ID%-%GITHUB_RUN_ATTEMPT%-build-tests"
+          "%ZEPHYR_PYTHON%" -m west -z "%ZEPHYR_BASE%" build -p always -b native_sim/native/64 "%GITHUB_WORKSPACE%\tests" --build-dir "%BUILD_DIR%"
           if errorlevel 1 exit /b %ERRORLEVEL%
-          "%GITHUB_WORKSPACE%\build-tests\zephyr\zephyr.exe"
+          "%BUILD_DIR%\zephyr\zephyr.exe"
 
   ci-gate:
     name: "CI Gate"
