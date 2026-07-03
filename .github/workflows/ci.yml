@@ -1,4 +1,4 @@
-﻿name: GloveAssist CI/CD
+name: GloveAssist CI/CD
 
 on:
   push:
@@ -7,78 +7,161 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+  packages: read
+
 env:
-  ZEPHYR_BASE: "C:\\zephyr-workspace\\zephyr"
-  ZEPHYR_SDK_INSTALL_DIR: "C:\\zephyr-sdk-1.0.1"
-  ZEPHYR_TOOLCHAIN_VARIANT: "zephyr"
-  ZEPHYR_PYTHON: "C:\\zephyr-workspace\\.venv\\Scripts\\python.exe"
+  CI_IMAGE: ghcr.io/deliasascau/gloveassist-zephyr-ci:0.16.8
+  CI_IMAGE_DOCKERFILE: Dockerfile.ci
 
 jobs:
 
-  build-stm32:
-    name: "Build STM32"
-    runs-on: [self-hosted, Windows, x64]
+  ensure-ci-image:
+    name: "Ensure CI Image"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build STM32
-        shell: cmd
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull current image or rebuild
         run: |
-          set "PATH=C:\zephyr-workspace\.venv\Scripts;%PATH%"
-          set "CMAKE_PREFIX_PATH=%ZEPHYR_SDK_INSTALL_DIR%;%CMAKE_PREFIX_PATH%"
-          set "GIT_CONFIG_COUNT=1"
-          set "GIT_CONFIG_KEY_0=safe.directory"
-          set "GIT_CONFIG_VALUE_0=*"
-          set "BUILD_DIR=%RUNNER_TEMP%\gloveassist-%GITHUB_RUN_ID%-%GITHUB_RUN_ATTEMPT%-build-stm32"
-          "%ZEPHYR_PYTHON%" -m west -z "%ZEPHYR_BASE%" build -p always -b stm32_min_dev@blue "%GITHUB_WORKSPACE%\application\stm32_app" --build-dir "%BUILD_DIR%"
+          set -euo pipefail
+
+          image="${CI_IMAGE}"
+          dockerfile="${CI_IMAGE_DOCKERFILE}"
+          dockerfile_sha="$(sha256sum "$dockerfile" | awk '{print $1}')"
+          rebuild=1
+
+          echo "CI image: $image"
+          echo "Dockerfile SHA: $dockerfile_sha"
+
+          if docker pull "$image"; then
+            image_sha="$(docker inspect "$image" --format '{{ index .Config.Labels "io.gloveassist.dockerfile-sha" }}' 2>/dev/null || true)"
+            if [ "$image_sha" = "$dockerfile_sha" ]; then
+              echo "CI image is already up to date."
+              rebuild=0
+            else
+              echo "CI image exists, but Dockerfile changed."
+              echo "Image SHA: $image_sha"
+            fi
+          else
+            echo "CI image does not exist yet."
+          fi
+
+          if [ "$rebuild" = "1" ]; then
+            docker build \
+              --label "io.gloveassist.dockerfile-sha=$dockerfile_sha" \
+              -f "$dockerfile" \
+              -t "$image" \
+              .
+            docker push "$image"
+          fi
+
+  build-stm32:
+    name: "Build STM32"
+    runs-on: ubuntu-latest
+    needs: [ensure-ci-image]
+    container:
+      image: ghcr.io/deliasascau/gloveassist-zephyr-ci:0.16.8
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mark Git worktrees safe
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory /opt/zephyr-workspace
+          git config --global --add safe.directory /opt/zephyr-workspace/zephyr
+
+      - name: Build STM32
+        run: |
+          west -z "$ZEPHYR_BASE" build \
+            -p always \
+            -b stm32_min_dev@blue \
+            "$GITHUB_WORKSPACE/application/stm32_app" \
+            --build-dir "$GITHUB_WORKSPACE/build-stm32"
 
       - uses: actions/upload-artifact@v4
         with:
           name: stm32-firmware
-          path: ${{ runner.temp }}\gloveassist-${{ github.run_id }}-${{ github.run_attempt }}-build-stm32\zephyr\zephyr.bin
+          path: build-stm32/zephyr/zephyr.bin
 
   build-esp32:
     name: "Build ESP32"
-    runs-on: [self-hosted, Windows, x64]
+    runs-on: ubuntu-latest
+    needs: [ensure-ci-image]
+    container:
+      image: ghcr.io/deliasascau/gloveassist-zephyr-ci:0.16.8
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build ESP32
-        shell: cmd
+      - name: Mark Git worktrees safe
         run: |
-          set "PATH=C:\zephyr-workspace\.venv\Scripts;%PATH%"
-          set "CMAKE_PREFIX_PATH=%ZEPHYR_SDK_INSTALL_DIR%;%CMAKE_PREFIX_PATH%"
-          set "GIT_CONFIG_COUNT=1"
-          set "GIT_CONFIG_KEY_0=safe.directory"
-          set "GIT_CONFIG_VALUE_0=*"
-          set "BOARD=esp32_devkitc_wroom/esp32/procpu"
-          if exist "C:\zephyr-workspace\zephyr\boards\espressif\esp32_devkitc\esp32_devkitc_procpu.yaml" set "BOARD=esp32_devkitc/esp32/procpu"
-          set "BUILD_DIR=%RUNNER_TEMP%\gloveassist-%GITHUB_RUN_ID%-%GITHUB_RUN_ATTEMPT%-build-esp32"
-          "%ZEPHYR_PYTHON%" -m west -z "%ZEPHYR_BASE%" build -p always -b "%BOARD%" "%GITHUB_WORKSPACE%\application\esp32_app" --build-dir "%BUILD_DIR%"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory /opt/zephyr-workspace
+          git config --global --add safe.directory /opt/zephyr-workspace/zephyr
+
+      - name: Build ESP32
+        run: |
+          board="esp32_devkitc_wroom/esp32/procpu"
+          if [ -f /opt/zephyr-workspace/zephyr/boards/espressif/esp32_devkitc/esp32_devkitc_procpu.yaml ]; then
+            board="esp32_devkitc/esp32/procpu"
+          fi
+
+          west -z "$ZEPHYR_BASE" build \
+            -p always \
+            -b "$board" \
+            "$GITHUB_WORKSPACE/application/esp32_app" \
+            --build-dir "$GITHUB_WORKSPACE/build-esp32"
 
       - uses: actions/upload-artifact@v4
         with:
           name: esp32-firmware
-          path: ${{ runner.temp }}\gloveassist-${{ github.run_id }}-${{ github.run_attempt }}-build-esp32\zephyr\zephyr.bin
+          path: build-esp32/zephyr/zephyr.bin
 
   unit-tests:
     name: "Unit Tests"
-    runs-on: [self-hosted, Windows, x64]
+    runs-on: ubuntu-latest
+    needs: [ensure-ci-image]
+    container:
+      image: ghcr.io/deliasascau/gloveassist-zephyr-ci:0.16.8
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    env:
+      ZEPHYR_TOOLCHAIN_VARIANT: host
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build + Run tests
-        shell: cmd
+      - name: Mark Git worktrees safe
         run: |
-          set "PATH=C:\zephyr-workspace\.venv\Scripts;%PATH%"
-          set "CMAKE_PREFIX_PATH=%ZEPHYR_SDK_INSTALL_DIR%;%CMAKE_PREFIX_PATH%"
-          set "GIT_CONFIG_COUNT=1"
-          set "GIT_CONFIG_KEY_0=safe.directory"
-          set "GIT_CONFIG_VALUE_0=*"
-          set "BUILD_DIR=%RUNNER_TEMP%\gloveassist-%GITHUB_RUN_ID%-%GITHUB_RUN_ATTEMPT%-build-tests"
-          "%ZEPHYR_PYTHON%" -m west -z "%ZEPHYR_BASE%" build -p always -b native_sim/native/64 "%GITHUB_WORKSPACE%\tests" --build-dir "%BUILD_DIR%"
-          if errorlevel 1 exit /b %ERRORLEVEL%
-          "%BUILD_DIR%\zephyr\zephyr.exe"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory /opt/zephyr-workspace
+          git config --global --add safe.directory /opt/zephyr-workspace/zephyr
+
+      - name: Build + Run tests
+        run: |
+          west -z "$ZEPHYR_BASE" build \
+            -p always \
+            -b native_sim/native/64 \
+            "$GITHUB_WORKSPACE/tests" \
+            --build-dir "$GITHUB_WORKSPACE/build-tests"
+          "$GITHUB_WORKSPACE/build-tests/zephyr/zephyr.exe"
 
   ci-gate:
     name: "CI Gate"
