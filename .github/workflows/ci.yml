@@ -179,6 +179,14 @@ jobs:
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
+      - name: Create ESP32 credentials from secrets
+        shell: cmd
+        env:
+          WIFI_SSID: ${{ secrets.WIFI_SSID }}
+          WIFI_PASSWORD: ${{ secrets.WIFI_PASSWORD }}
+          GLOVE_MQTT_USERNAME: ${{ secrets.GLOVE_MQTT_USERNAME }}
+          GLOVE_MQTT_PASSWORD: ${{ secrets.GLOVE_MQTT_PASSWORD }}
+        run: C:\zephyr-workspace\.venv\Scripts\python.exe scripts\write_esp32_credentials.py --require-wifi application\esp32_app\credentials.conf
       - name: Run ESP32 flash script
         shell: cmd
         run: |
