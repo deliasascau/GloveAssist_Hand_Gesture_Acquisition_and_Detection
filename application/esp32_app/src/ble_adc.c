@@ -50,10 +50,32 @@ static bool link_encrypted;
 static bool security_needed;
 static bool security_pause_started;
 static uint32_t next_security_request_ms;
+static volatile bool s_send_welcome;  /* set in ccc_changed, sent from main loop */
+
+#define BLE_TX_CACHE_LEN 32U
+static char s_last_tx_text[BLE_TX_CACHE_LEN];
+static uint8_t s_last_tx_len;
 
 #define BLE_SECURITY_DELAY_MS        1500U
 #define BLE_SECURITY_PAUSE_SETTLE_MS 800U
 #define BLE_SECURITY_MQTT_PAUSE_MS   10000U
+
+static void remember_tx_text(const char *text, size_t len)
+{
+    if (text == NULL) {
+        return;
+    }
+
+    if (len >= BLE_TX_CACHE_LEN) {
+        len = BLE_TX_CACHE_LEN - 1U;
+    }
+
+    (void)memmove(s_last_tx_text, text, len);
+    s_last_tx_text[len] = '\0';
+    s_last_tx_len = (uint8_t)len;
+}
+
+static int notify_text(const char *text, size_t len);
 
 static uint8_t cmd_to_upper(uint8_t c)
 {
@@ -76,8 +98,6 @@ static uint16_t cmd_skip_ws(const uint8_t *data, uint16_t len, uint16_t idx)
     return idx;
 }
 
-static volatile bool s_send_welcome;  /* set in ccc_changed, sent from main loop */
-
 static void ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
     ARG_UNUSED(attr);
@@ -94,14 +114,10 @@ static ssize_t rx_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
                         const void *buf, uint16_t len, uint16_t offset,
                         uint8_t flags)
 {
+    ARG_UNUSED(conn);
     ARG_UNUSED(attr);
     ARG_UNUSED(offset);
     ARG_UNUSED(flags);
-
-    if (bt_conn_get_security(conn) < BT_SECURITY_L2) {
-        LOG_WRN("BLE RX rejected: link not encrypted");
-        return BT_GATT_ERR(BT_ATT_ERR_AUTHENTICATION);
-    }
 
     const uint8_t *data = (const uint8_t *)buf;
     uint16_t i0 = cmd_skip_ws(data, len, 0U);
@@ -143,6 +159,15 @@ static ssize_t rx_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
     }
 
     return (ssize_t)len;
+}
+
+static ssize_t tx_read(struct bt_conn *conn, const struct bt_gatt_attr *attr,
+                       void *buf, uint16_t len, uint16_t offset)
+{
+    const char *text = (s_last_tx_len > 0U) ? s_last_tx_text : "GloveAssist OK\n";
+    size_t text_len = strlen(text);
+
+    return bt_gatt_attr_read(conn, attr, buf, len, offset, text, text_len);
 }
 
 static const struct bt_data ad[] = {
@@ -197,9 +222,9 @@ static void adv_retry_work_handler(struct k_work *work)
 BT_GATT_SERVICE_DEFINE(nus_svc,
     BT_GATT_PRIMARY_SERVICE(&nus_svc_uuid),
     BT_GATT_CHARACTERISTIC(&nus_tx_uuid.uuid,
-                           BT_GATT_CHRC_NOTIFY,
-                           BT_GATT_PERM_NONE,
-                           NULL, NULL, NULL),
+                           BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
+                           BT_GATT_PERM_READ,
+                           tx_read, NULL, NULL),
     /* CCC is only a subscription flag. Keep it writable before encryption so
      * phone apps do not fail with "reconnect to subscribe". */
     BT_GATT_CCC(ccc_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
@@ -213,6 +238,21 @@ BT_GATT_SERVICE_DEFINE(nus_svc,
                            BT_GATT_PERM_WRITE,
                            NULL, rx_write, NULL),
 );
+
+static int notify_text(const char *text, size_t len)
+{
+    remember_tx_text(text, len);
+
+    if ((current_conn == NULL) || !notify_enabled || (text == NULL)) {
+        return -ENOTCONN;
+    }
+
+    if (len > 20U) {
+        len = 20U;
+    }
+
+    return bt_gatt_notify(current_conn, &nus_svc.attrs[2], text, (uint16_t)len);
+}
 
 static void connected(struct bt_conn *conn, uint8_t err)
 {
@@ -374,7 +414,11 @@ void ble_adc_process(void)
     /* Send welcome confirmation when phone first subscribes to notifications. */
     if (s_send_welcome && notify_enabled && (current_conn != NULL)) {
         s_send_welcome = false;
-        (void)ble_adc_send_text("GloveAssist OK\n");
+        if (s_last_tx_len > 0U) {
+            (void)notify_text(s_last_tx_text, s_last_tx_len);
+        } else {
+            (void)notify_text("GloveAssist OK\n", strlen("GloveAssist OK\n"));
+        }
     }
 
     if ((current_conn == NULL) || link_encrypted || !security_needed) {
@@ -433,7 +477,7 @@ int ble_adc_send_values(const uint16_t adc[4])
         return -EINVAL;
     }
 
-    return bt_gatt_notify(current_conn, &nus_svc.attrs[2], buf, (uint16_t)len);
+    return notify_text(buf, (size_t)len);
 }
 
 void ble_adc_set_last_gesture(gesture_id_t g)
@@ -464,14 +508,11 @@ bool ble_adc_pop_caregiver_ack_request(gesture_id_t *out_gesture)
 
 int ble_adc_send_text(const char *text)
 {
-    if ((current_conn == NULL) || !notify_enabled || (text == NULL)) {
-        return -ENOTCONN;
+    if (text == NULL) {
+        return -EINVAL;
     }
     size_t len = strlen(text);
-    if (len > 20U) {
-        len = 20U;
-    }
-    return bt_gatt_notify(current_conn, &nus_svc.attrs[2], text, (uint16_t)len);
+    return notify_text(text, len);
 }
 
 int ble_adc_send_gesture(gesture_id_t gesture, const uint16_t adc[4])
@@ -492,7 +533,7 @@ int ble_adc_send_gesture(gesture_id_t gesture, const uint16_t adc[4])
         return -EINVAL;
     }
 
-    return bt_gatt_notify(current_conn, &nus_svc.attrs[2], buf, (uint16_t)len);
+    return notify_text(buf, (size_t)len);
 }
 
 #endif /* CONFIG_BT */

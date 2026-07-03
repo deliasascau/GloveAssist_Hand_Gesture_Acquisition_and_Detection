@@ -71,6 +71,8 @@ static void handle_received_frame(const frame_hmac_t *received)
         if (received->base.payload[0] == (uint8_t)SESSION_HELLO) {
             s_pending_session_nonce = frame_get_counter(&received->base);
             s_session_ready = true;
+            frame_hmac_parser_init(&s_parser);
+            k_msgq_purge(&s_rx_byte_msgq);
         }
         break;
     default:

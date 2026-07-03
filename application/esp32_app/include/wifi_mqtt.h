@@ -58,18 +58,17 @@ bool wifi_mqtt_is_connected(void);
  * @brief Temporarily pause MQTT/TLS activity while BLE pairing/encryption runs.
  *
  * ESP32 RAM is tight with WiFi, TLS and BLE SMP active together. BLE calls this
- * before requesting link-layer encryption so MQTT can abort its TLS socket and
- * reconnect after the BLE security procedure settles.
+ * before requesting link-layer encryption so MQTT avoids starting a new TLS
+ * handshake while the BLE security procedure settles.
  */
 void wifi_mqtt_pause_for_ble_security(uint32_t pause_ms);
 
 /**
- * @brief Disconnect WiFi immediately so BLE Secure Connections (P-256 ECC)
- * has enough heap to complete pairing without crashing the ESP32.
+ * @brief Pause new MQTT/TLS connection attempts while BLE pairing runs.
  *
- * Call from the BLE connected callback. WiFi reconnects automatically when
- * wifi_mqtt_reconnect_after_ble_pairing() is called (from security_changed or
- * disconnected callbacks).
+ * Call from the BLE connected callback. WiFi stays associated when possible;
+ * wifi_mqtt_reconnect_after_ble_pairing() cancels the pause early after
+ * security_changed or disconnected callbacks.
  */
 void wifi_mqtt_disconnect_for_ble_pairing(void);
 

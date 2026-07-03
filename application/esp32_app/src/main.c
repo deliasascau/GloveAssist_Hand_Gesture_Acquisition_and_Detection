@@ -73,9 +73,23 @@ static uint32_t s_session_nonce;       /* nonce sent to STM32 in SESSION_HELLO *
 static uint32_t s_session_retry_ts;   /* timestamp of last SESSION_HELLO send  */
 static uint32_t s_last_stm32_rx_ts;   /* last valid frame received from STM32   */
 static bool     s_session_established;
+static frame_hmac_parser_t s_uart_parser;
 #define SESSION_RETRY_MS  2000U        /* resend SESSION_HELLO every 2s until ACK */
 
 /* -- Internal helpers --------------------------------------------------- */
+
+static void reset_gesture_pipeline(void)
+{
+    s_last_stable_gesture = GESTURE_NONE;
+    s_pending_gesture = GESTURE_NONE;
+    s_gesture_stable_since = 0U;
+    s_last_stable_time = 0U;
+    s_midpoint_buzzed = false;
+    s_compose_gesture = GESTURE_NONE;
+    s_compose_count = 0U;
+    s_fist_hold_start = 0U;
+    s_recal_requested = false;
+}
 
 static void check_seq(uint8_t seq)
 {
@@ -107,6 +121,8 @@ static void start_uart_session(uint32_t now, const char *reason)
     s_last_seq = 0xFFU;
 
     frame_secure_set_session(nonce);
+    frame_hmac_parser_init(&s_uart_parser);
+    reset_gesture_pipeline();
     uart_stm32_send_session_hello(nonce);
 
     if (reason != NULL) {
@@ -311,8 +327,7 @@ int main(void)
 
     LOG_INF("Init OK. Waiting for STM32 frames on UART2...");
 
-    frame_hmac_parser_t parser;
-    frame_hmac_parser_init(&parser);
+    frame_hmac_parser_init(&s_uart_parser);
 
     uint32_t last_hb_tx    = k_uptime_get_32();
     uint32_t last_report   = k_uptime_get_32();
@@ -535,7 +550,7 @@ int main(void)
         }
 
         frame_hmac_t hf;
-        int rc = frame_hmac_parser_push_byte(&parser, b, &hf);
+        int rc = frame_hmac_parser_push_byte(&s_uart_parser, b, &hf);
 
         if (rc == 1) {
             handle_frame(&hf.base);

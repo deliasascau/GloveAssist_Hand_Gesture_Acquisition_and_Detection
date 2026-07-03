@@ -876,16 +876,6 @@ int wifi_mqtt_init(void)
         .timeout     = 15,
     };
 
-    int err = net_mgmt(NET_REQUEST_WIFI_CONNECT, iface,
-                       &s_wifi_params, sizeof(s_wifi_params));
-    if (err != 0) {
-        LOG_ERR("WiFi connect request failed: %d", err);
-        return err;
-    }
-
-    s_wifi_connecting = true;
-    LOG_INF("WiFi: connecting to '%s'...", CONFIG_GLOVE_WIFI_SSID);
-
     int if_name_rc = net_if_get_name(iface, s_if_name, sizeof(s_if_name));
     if (if_name_rc <= 0) {
         s_if_name[0] = '\0';
@@ -906,6 +896,13 @@ int wifi_mqtt_init(void)
                         K_NO_WAIT);
         k_thread_name_set(&s_mqtt_thread, "wifi_mqtt");
     }
+
+    s_wifi_connected = false;
+    s_wifi_connecting = false;
+    s_wifi_reconnect_needed = true;
+    s_wifi_reconnect_after = 0U;
+    s_last_connect_attempt = k_uptime_get_32() - CONNECT_RETRY_MS;
+    LOG_INF("WiFi: connect scheduled to '%s'", CONFIG_GLOVE_WIFI_SSID);
 
     return 0;
 }
