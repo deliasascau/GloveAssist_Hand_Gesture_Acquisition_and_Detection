@@ -755,6 +755,10 @@ static int do_wifi_connect(void)
     if (err != 0) {
         LOG_WRN("WiFi reconnect request failed: %d", err);
         s_wifi_connecting = false;
+        s_wifi_reconnect_needed = true;
+        s_wifi_reconnect_after = k_uptime_get_32() + s_wifi_backoff_ms;
+        s_wifi_backoff_ms = (s_wifi_backoff_ms < 60000U)
+                            ? (s_wifi_backoff_ms * 2U) : 60000U;
         return err;
     }
 
@@ -902,7 +906,8 @@ int wifi_mqtt_init(void)
     s_wifi_reconnect_needed = true;
     s_wifi_reconnect_after = 0U;
     s_last_connect_attempt = k_uptime_get_32() - CONNECT_RETRY_MS;
-    LOG_INF("WiFi: connect scheduled to '%s'", CONFIG_GLOVE_WIFI_SSID);
+
+    (void)do_wifi_connect();
 
     return 0;
 }

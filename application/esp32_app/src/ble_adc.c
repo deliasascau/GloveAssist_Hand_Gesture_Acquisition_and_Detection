@@ -50,7 +50,8 @@ static bool link_encrypted;
 static bool security_needed;
 static bool security_pause_started;
 static uint32_t next_security_request_ms;
-static volatile bool s_send_welcome;  /* set in ccc_changed, sent from main loop */
+static uint8_t s_welcome_retries;
+static uint32_t s_next_welcome_ms;
 
 #define BLE_TX_CACHE_LEN 32U
 static char s_last_tx_text[BLE_TX_CACHE_LEN];
@@ -106,7 +107,10 @@ static void ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
     LOG_INF("BLE notify %s", notify_enabled ? "enabled" : "disabled");
 
     if (notify_enabled) {
-        s_send_welcome = true;
+        s_welcome_retries = 4U;
+        s_next_welcome_ms = 0U;
+    } else {
+        s_welcome_retries = 0U;
     }
 }
 
@@ -266,6 +270,8 @@ static void connected(struct bt_conn *conn, uint8_t err)
     }
     current_conn = bt_conn_ref(conn);
     notify_enabled = false;
+    s_welcome_retries = 0U;
+    s_next_welcome_ms = 0U;
     link_encrypted = false;
     security_needed = true;
     /*
@@ -294,6 +300,8 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
         current_conn = NULL;
     }
     notify_enabled = false;
+    s_welcome_retries = 0U;
+    s_next_welcome_ms = 0U;
     link_encrypted = false;
     security_needed = false;
     security_pause_started = false;
@@ -411,13 +419,20 @@ void ble_adc_process(void)
     uint32_t now;
     int err;
 
-    /* Send welcome confirmation when phone first subscribes to notifications. */
-    if (s_send_welcome && notify_enabled && (current_conn != NULL)) {
-        s_send_welcome = false;
-        if (s_last_tx_len > 0U) {
-            (void)notify_text(s_last_tx_text, s_last_tx_len);
-        } else {
-            (void)notify_text("GloveAssist OK\n", strlen("GloveAssist OK\n"));
+    /* Replay a few times after subscription. Some phone apps miss the first
+     * notify while the characteristic screen is still opening. */
+    if ((s_welcome_retries > 0U) && notify_enabled && (current_conn != NULL)) {
+        now = k_uptime_get_32();
+        if ((s_next_welcome_ms == 0U)
+            || ((int32_t)(now - s_next_welcome_ms) >= 0)) {
+            s_welcome_retries--;
+            s_next_welcome_ms = now + 350U;
+
+            if (s_last_tx_len > 0U) {
+                (void)notify_text(s_last_tx_text, s_last_tx_len);
+            } else {
+                (void)notify_text("GloveAssist OK\n", strlen("GloveAssist OK\n"));
+            }
         }
     }
 
