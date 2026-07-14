@@ -232,6 +232,38 @@ jobs:
             ${{ runner.temp }}\gloveassist-${{ github.run_id }}-${{ github.run_attempt }}-esp32\CMakeFiles\CMakeOutput.log
             ${{ runner.temp }}\gloveassist-${{ github.run_id }}-${{ github.run_attempt }}-esp32\CMakeFiles\CMakeConfigureLog.yaml
 
+  hardware-e2e:
+    name: "Hardware E2E"
+    runs-on: [self-hosted, Windows, x64]
+    needs: [flash-stm32, flash-esp32]
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run hardware E2E smoke test
+        shell: powershell
+        env:
+          ESP32_SERIAL_PORT: ${{ vars.ESP32_SERIAL_PORT }}
+          ESP32_SERIAL_BAUD: ${{ vars.ESP32_SERIAL_BAUD }}
+          REQUIRE_BLE_CLIENT: ${{ vars.REQUIRE_BLE_CLIENT }}
+        run: |
+          $e2eArgs = @('-TimeoutSec', '180')
+
+          if ($env:REQUIRE_BLE_CLIENT -eq 'true') {
+            $e2eArgs += '-RequireBleClient'
+          } else {
+            $e2eArgs += '-SkipBleClient'
+          }
+
+          .\scripts\e2e_hardware_smoke.ps1 @e2eArgs
+      - name: Upload hardware E2E logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hardware-e2e-logs
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}\gloveassist-${{ github.run_id }}-${{ github.run_attempt }}-e2e\*
+
   release:
     name: "Release ${{ github.ref_name }}"
     runs-on: ubuntu-latest

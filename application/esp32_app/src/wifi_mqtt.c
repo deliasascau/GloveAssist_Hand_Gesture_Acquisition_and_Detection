@@ -528,6 +528,13 @@ static void mqtt_evt_handler(struct mqtt_client *client,
             LOG_INF("MQTT connected to %s:%d",
                     CONFIG_GLOVE_MQTT_BROKER_HOST,
                     CONFIG_GLOVE_MQTT_BROKER_PORT);
+
+            struct mqtt_publish_msg online_msg = {
+                .kind = MQTT_PUBLISH_STATUS,
+            };
+            (void)snprintf(online_msg.status, sizeof(online_msg.status),
+                           "%s", "online");
+            (void)enqueue_publish(&online_msg);
         } else {
             s_mqtt_connected = false;
             LOG_ERR("MQTT CONNACK error: %d", evt->result);
