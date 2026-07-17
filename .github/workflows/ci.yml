@@ -253,7 +253,7 @@ jobs:
           ESP32_SERIAL_BAUD: ${{ vars.ESP32_SERIAL_BAUD }}
           REQUIRE_BLE_CLIENT: ${{ vars.REQUIRE_BLE_CLIENT }}
         run: |
-          $e2eArgs = @('-TimeoutSec', '180')
+          $e2eArgs = @('-TimeoutSec', '180', '-ResetEsp32')
 
           if ($env:REQUIRE_BLE_CLIENT -eq 'true') {
             $e2eArgs += '-RequireBleClient'
