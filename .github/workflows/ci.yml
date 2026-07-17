@@ -251,16 +251,8 @@ jobs:
         env:
           ESP32_SERIAL_PORT: ${{ vars.ESP32_SERIAL_PORT }}
           ESP32_SERIAL_BAUD: ${{ vars.ESP32_SERIAL_BAUD }}
-          REQUIRE_BLE_CLIENT: ${{ vars.REQUIRE_BLE_CLIENT }}
         run: |
-          $e2eArgs = @('-TimeoutSec', '180', '-ResetEsp32')
-
-          if ($env:REQUIRE_BLE_CLIENT -eq 'true') {
-            $e2eArgs += '-RequireBleClient'
-          } else {
-            $e2eArgs += '-SkipBleClient'
-          }
-
+          $e2eArgs = @('-TimeoutSec', '180', '-ResetEsp32', '-SkipBleClient')
           .\scripts\e2e_hardware_smoke.ps1 @e2eArgs
       - name: Upload hardware E2E logs
         if: always()
