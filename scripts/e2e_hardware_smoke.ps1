@@ -78,11 +78,17 @@ function Get-SerialPortInventory {
 function Resolve-Esp32Port {
     param([string]$RequestedPort)
 
+    $ports = @(Get-SerialPortInventory)
+
     if ($RequestedPort) {
-        return $RequestedPort
+        $requested = @($ports | Where-Object { $_.Port -ieq $RequestedPort })
+        if ($requested.Count -gt 0) {
+            return $requested[0].Port
+        }
+
+        Write-Warning "Requested ESP32 serial port '$RequestedPort' was not found; trying auto-detect."
     }
 
-    $ports = @(Get-SerialPortInventory)
     $preferred = @($ports | Where-Object {
         $_.Name -match 'CP210|Silicon Labs|USB.*UART|USB Serial|CH340'
     })
