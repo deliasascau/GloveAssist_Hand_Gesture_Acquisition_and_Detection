@@ -247,13 +247,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run hardware E2E smoke test
-        shell: powershell
+        shell: cmd
         env:
           ESP32_SERIAL_PORT: ${{ vars.ESP32_SERIAL_PORT }}
           ESP32_SERIAL_BAUD: ${{ vars.ESP32_SERIAL_BAUD }}
         run: |
-          $e2eArgs = @('-TimeoutSec', '180', '-ResetEsp32', '-SkipBleClient')
-          .\scripts\e2e_hardware_smoke.ps1 @e2eArgs
+          powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts\e2e_hardware_smoke.ps1 -TimeoutSec 180 -ResetEsp32 -SkipBleClient > "%RUNNER_TEMP%\hardware-e2e.log" 2>&1
+          set E2E_EXIT=%ERRORLEVEL%
+          type "%RUNNER_TEMP%\hardware-e2e.log"
+          exit /b %E2E_EXIT%
       - name: Upload hardware E2E logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -261,6 +263,7 @@ jobs:
           name: hardware-e2e-logs
           if-no-files-found: ignore
           path: |
+            ${{ runner.temp }}\hardware-e2e.log
             ${{ runner.temp }}\gloveassist-${{ github.run_id }}-${{ github.run_attempt }}-e2e\*
 
   release:
