@@ -6,6 +6,13 @@ on:
     tags: ["v*"]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_hardware_tests:
+        description: "Run flash + hardware E2E on the self-hosted Windows runner"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -174,7 +181,7 @@ jobs:
     name: "Flash STM32"
     runs-on: [self-hosted, Windows, x64]
     needs: [ci-gate]
-    if: github.ref == 'refs/heads/main' && vars.RUN_HARDWARE_TESTS == 'true'
+    if: github.ref == 'refs/heads/main' && (contains(vars.RUN_HARDWARE_TESTS, 'true') || inputs.run_hardware_tests == true || inputs.run_hardware_tests == 'true')
     steps:
       - uses: actions/checkout@v4
       - name: Run STM32 flash script
@@ -201,7 +208,7 @@ jobs:
     name: "Flash ESP32"
     runs-on: [self-hosted, Windows, x64]
     needs: [ci-gate]
-    if: github.ref == 'refs/heads/main' && vars.RUN_HARDWARE_TESTS == 'true'
+    if: github.ref == 'refs/heads/main' && (contains(vars.RUN_HARDWARE_TESTS, 'true') || inputs.run_hardware_tests == true || inputs.run_hardware_tests == 'true')
     steps:
       - uses: actions/checkout@v4
       - name: Create ESP32 credentials from secrets
@@ -236,7 +243,7 @@ jobs:
     name: "Hardware E2E"
     runs-on: [self-hosted, Windows, x64]
     needs: [flash-stm32, flash-esp32]
-    if: github.ref == 'refs/heads/main' && vars.RUN_HARDWARE_TESTS == 'true'
+    if: github.ref == 'refs/heads/main' && (contains(vars.RUN_HARDWARE_TESTS, 'true') || inputs.run_hardware_tests == true || inputs.run_hardware_tests == 'true')
     steps:
       - uses: actions/checkout@v4
       - name: Run hardware E2E smoke test
