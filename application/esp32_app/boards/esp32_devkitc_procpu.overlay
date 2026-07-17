@@ -33,32 +33,6 @@
 	status = "okay";
 };
 
-/*
- * Emergency GPIO backup channel (UART fallback).
- *   GPIO18: ALERT_IN  <- STM32 PB0 (output)
- *   GPIO19: ACK_OUT   -> STM32 PB1 (input)
- */
-/ {
-	aliases {
-		alert-in = &alert_in_gpio;
-		ack-out  = &ack_out_gpio;
-	};
-
-	emergency_gpios {
-		compatible = "gpio-leds";
-
-		alert_in_gpio: alert_in_0 {
-			gpios = <&gpio0 18 GPIO_ACTIVE_HIGH>;
-			label = "Alert IN GPIO18";
-		};
-
-		ack_out_gpio: ack_out_0 {
-			gpios = <&gpio0 19 GPIO_ACTIVE_HIGH>;
-			label = "ACK OUT GPIO19";
-		};
-	};
-};
-
 /* UART1: pini default GPIO9/GPIO10 = SPI flash intern, dezactivat */
 &uart1 {
 	status = "disabled";

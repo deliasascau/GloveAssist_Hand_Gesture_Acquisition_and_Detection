@@ -12,7 +12,6 @@ target_sources(app PRIVATE
     src/adc_sensor.c
     src/haptic.c
     src/uart_esp32.c
-    src/alert.c
     ../common/src/frame_protocol.c
 )
 

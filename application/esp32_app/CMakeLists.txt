@@ -43,7 +43,6 @@ target_sources(app PRIVATE
     src/gesture.c
     src/uart_stm32.c
     src/ble_adc.c
-    src/gpio_alert.c
     src/calibration.c
     src/wifi_mqtt.c
     ../common/src/frame_protocol.c

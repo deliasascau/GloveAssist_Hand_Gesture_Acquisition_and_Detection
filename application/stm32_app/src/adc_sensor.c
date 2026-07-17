@@ -2,7 +2,7 @@
  * adc_sensor.c — ADC1 + DMA1 circular acquisition for 4 flex sensors.
  *
  * PA0 = index finger, PA1 = middle, PA2 = ring, PA3 = pinky.
- * 12-bit resolution, internal reference, ~239.5-cycle sample time.
+ * 12-bit resolution, internal reference, 55.5-cycle sample time.
  * DMA1 Channel1 in circular mode writes continuously to s_adc[4].
  */
 

@@ -118,6 +118,7 @@ $RECYCLE.BIN/
 # Test Results
 test_results/
 coverage/
+e2e-logs/
 *.gcov
 *.gcda
 *.gcno
@@ -159,9 +160,10 @@ datasets/raw/*.bin
 .claude/
 .copilot/
 
-# Markdown — doar README.md pe GitHub, restul local
+# Markdown - keep curated project docs local unless explicitly requested
 *.md
 !README.md
+docs/
 
 # Proiect vechi — doar referință locală
 old_project/

@@ -6,29 +6,29 @@
 #include "frame_protocol.h"
 
 /*
- * Flex sensor threshold fallback: ADC BELOW this = finger bent.
- * Hardware: 3.3V → 1kΩ → ADC → flex sensor → GND.
- *   Extended: high resistance → high ADC (~3165).
- *   Bent:     low resistance  → low ADC  (~47-347).
- * Default 2048 is replaced after calibration.
+ * Flex sensor threshold fallback: ADC below this = finger bent.
+ * Hardware: 3.3V -> 1k resistor -> ADC -> flex sensor -> GND.
+ *   Extended: high resistance -> high ADC.
+ *   Bent:     low resistance  -> low ADC.
+ * Default 2048 is used only before a valid calibration profile is loaded.
  */
 #define FLEX_THRESH       2048U
 
 /*
  * Gesture must be stable for this many ms before being reported.
- * 2000ms matches the old AVR project — adequate for limited motor control.
+ * 1000 ms keeps reporting deliberate while still feeling responsive.
  */
 #define GESTURE_STABLE_MS  1000U
 
 /**
- * @brief Load per-finger calibration profiles (open-hand and per-gesture bent values).
+ * @brief Load per-finger calibration profiles.
  *
- * open_avg[i]: ADC average when finger i is fully extended (from NONE calibration phase).
+ * open_avg[i]: ADC average when finger i is fully extended (NONE phase).
  * fist_avg[i]: ADC average when finger i is bent in its target gesture:
- *   [0] = index  finger bent ADC (from WATER phase)
- *   [1] = middle finger bent ADC (from WC phase)
- *   [2] = ring   finger bent ADC (from FOOD phase)
- *   [3] = pinky  finger bent ADC (from HELP phase)
+ *   [0] = index  finger bent ADC (WATER phase)
+ *   [1] = middle finger bent ADC (WC phase)
+ *   [2] = ring   finger bent ADC (FOOD phase)
+ *   [3] = pinky  finger bent ADC (HELP phase)
  *
  * After this call, gesture_classify() uses normalized hysteresis scoring.
  * Before this call it falls back to binary FLEX_THRESH comparison.
@@ -43,8 +43,8 @@ bool gesture_has_profiles(void);
  *
  * With profiles: each finger gets a 0-100 bent score with hysteresis bands
  * (score > 65 = bent sticky, score < 35 = extended sticky, in between = keep state).
- * The mask accepts both cumulative bent gestures and raised-finger gestures:
- * WATER(0001 or 1110), WC(0011 or 1100), FOOD(0111 or 1000), HELP(1111).
+ * Current accepted masks:
+ * WATER(0001 or 1110), WC(0011), FOOD(0111), HELP(1111).
  *
  * Without profiles: binary FLEX_THRESH fallback.
  *

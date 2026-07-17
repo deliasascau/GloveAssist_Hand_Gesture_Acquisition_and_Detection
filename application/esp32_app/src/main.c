@@ -8,8 +8,8 @@
  *
  * Main loop:
  *   - Receives SENSOR_RAW frames from STM32 via UART2
- *   - Classifies gesture with 500ms stability filter
- *   - Notifies BLE phone with gesture name + raw ADC values
+ *   - Classifies gesture with compose + 1000ms stability filter
+ *   - Notifies BLE phone with gesture name and publishes over MQTT
  *   - Sends HEARTBEAT to STM32 every 1000ms
  *   - On BLE caregiver "OK" -> uart_stm32_send_caregiver_ack()
  *     -> STM32 plays OLED + buzzer + motor feedback
@@ -26,7 +26,6 @@
 #include "gesture.h"
 #include "uart_stm32.h"
 #include "ble_adc.h"
-#include "gpio_alert.h"
 #include "calibration.h"
 #include "wifi_mqtt.h"
 
@@ -65,7 +64,7 @@ static bool     s_recal_requested = false;
 /* -- First-boot calibration flag ---------------------------------------- */
 static bool s_need_calibration = false;  /* set if no NVS profiles found */
 
-/* -- Last ADC snapshot (removed periodic BLE ADC send — gestures only) ---- */
+/* -- Last ADC snapshot (used for calibration; BLE runtime sends gestures only) */
 static uint16_t s_last_adc[4];
 
 /* -- UART session handshake state --------------------------------------- */
@@ -142,7 +141,7 @@ static void handle_sensor_frame(const frame_t *f)
     s_total_frames++;
     uart_stm32_send_ack(f->seq);
 
-    /* Stocheaza ultimele valori ADC pentru trimitere periodica BLE */
+    /* Keep latest ADC values for calibration display and profile sampling. */
     s_last_adc[0] = adc[0];
     s_last_adc[1] = adc[1];
     s_last_adc[2] = adc[2];
@@ -284,14 +283,12 @@ int main(void)
 
     start_uart_session(k_uptime_get_32(), NULL);
 
+    bool ble_ready = false;
     if (ble_adc_init() != 0) {
         LOG_WRN("BLE init failed or disabled — continuing without BLE");
         /* Non-fatal: UART+WiFi+MQTT still work. BLE stubs return 0. */
-    }
-
-    if (gpio_alert_init() != 0) {
-        LOG_WRN("GPIO alert init failed — emergency backup unavailable");
-        /* Non-fatal: continue without backup channel */
+    } else {
+        ble_ready = true;
     }
 
     /*
@@ -326,6 +323,9 @@ int main(void)
     (void)wifi_mqtt_init();
 
     LOG_INF("Init OK. Waiting for STM32 frames on UART2...");
+    if (ble_ready) {
+        LOG_INF("BLE ready for phone connection");
+    }
 
     frame_hmac_parser_init(&s_uart_parser);
 
@@ -528,14 +528,6 @@ int main(void)
                 (void)ble_adc_send_text("CALIB:done\n");
                 s_calib_cnt = -1;
             }
-        }
-
-        /* Emergency GPIO backup: STM32 raised ALERT pin (UART is down) */
-        if (gpio_alert_poll()) {
-            /* Send emergency BLE notification: "G:6" = GESTURE_HELP */
-            static const uint16_t zeroadc[4] = {0U};
-            (void)ble_adc_send_gesture(GESTURE_HELP, zeroadc);
-            LOG_WRN("Emergency HELP forwarded via BLE (GPIO alert path)");
         }
 
         if (uart_stm32_poll_byte(&b) != 0) {

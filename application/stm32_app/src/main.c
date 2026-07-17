@@ -25,27 +25,21 @@
 #include "adc_sensor.h"
 #include "haptic.h"
 #include "uart_esp32.h"
-#include "alert.h"
 
 /* -- Timing ------------------------------------------------------------ */
 #define TX_PERIOD_MS      20U     /* sensor frame TX period (50 Hz)   */
 #define HB_PERIOD_MS      500U    /* heartbeat TX period               */
-#define LINK_TIMEOUT_MS  3000U    /* no ACK for 3 s -> local alert */
+#define LINK_TIMEOUT_MS  3000U    /* no ACK for 3 s -> local warning */
 #define LINK_BOOT_GRACE_MS 6000U  /* wait for ESP32 session after reset */
-#define ALERT_TIMEOUT_MS 10000U   /* re-raise ALERT if no ACK in 10 s */
 #define DIAG_PERIOD_MS   10000U   /* OLED RX diagnostics period       */
 #define FAULT_STATUS_PERIOD_MS 1000U /* report active sensor faults     */
 #define WDT_TIMEOUT_MS   2000U    /* FR-009: hardware reset after 2 s */
 #define WDT_FEED_MS       500U    /* feed only after the health loop  */
 
-/* Raise local audible/visual alert when the ESP32 link is lost. */
-#define LOCAL_ALERT_FALLBACK_ENABLED 1
-
 /* -- Link state -------------------------------------------------------- */
 typedef enum {
     LINK_NORMAL,
     LINK_UART_LOST,
-    LINK_ALERT_PENDING,
 } link_state_t;
 
 /* ── Module-level state ───────────────────────────────────────────────── */
@@ -56,9 +50,6 @@ static uint32_t     s_last_sensor_tx;
 static uint32_t     s_last_hb_tx;
 static uint32_t     s_last_ack_time;
 static uint32_t     s_boot_time;
-#if LOCAL_ALERT_FALLBACK_ENABLED
-static uint32_t     s_alert_raised_at;
-#endif
 static uint32_t     s_last_diag_tx;
 static uint32_t     s_last_fault_status_tx;
 static uint32_t     s_last_wdt_feed;
@@ -171,7 +162,6 @@ static void tick_session(uint32_t now)
     s_last_ack_time  = now;
     s_last_fault_status_tx = now - FAULT_STATUS_PERIOD_MS;
 
-    alert_clear();
     haptic_led_set(false);
     if (s_adc_fault.active_mask != 0U) {
         show_sensor_fault();
@@ -238,39 +228,10 @@ static void handle_cmd(const frame_t *f)
 
 /* ── Link watchdog helpers ────────────────────────────────────────────── */
 
-static link_state_t handle_uart_lost(link_state_t state,
-                                     uint32_t     now)
+static link_state_t handle_uart_lost(uint32_t now)
 {
-#if !LOCAL_ALERT_FALLBACK_ENABLED
-    ARG_UNUSED(state);
-    ARG_UNUSED(now);
-    alert_clear();
-    haptic_led_set(false);
+    haptic_led_set(((now % 500U) < 250U));
     return LINK_UART_LOST;
-#else
-    if (state == LINK_ALERT_PENDING) {
-        if (alert_ack_received()) {
-            alert_clear();
-            haptic_post_oled_show("ALERTA", "Logica lipsa");
-            haptic_post_buzzer_beep(2U, 80U, 80U);
-            return LINK_UART_LOST;
-        }
-        if ((now - s_alert_raised_at) >= ALERT_TIMEOUT_MS) {
-            alert_clear();
-            return LINK_UART_LOST;
-        }
-        return LINK_ALERT_PENDING;
-    }
-
-    /* In local fallback (ESP32 missing), do not classify gestures on STM32.
-     * Keep only a fixed missing-logic alert state on OLED. */
-    alert_raise();
-    s_alert_raised_at = now;
-    haptic_post_oled_show("ALERTA", "Logica lipsa");
-    haptic_post_buzzer_beep(2U, 120U, 120U);
-    haptic_post_motor_pulse(80U, 250U);
-    return LINK_ALERT_PENDING;
-#endif
 }
 
 static void tick_sensor_tx(uint32_t now, const uint16_t adc[ADC_NUM_CHANNELS])
@@ -336,13 +297,10 @@ static void tick_link_watchdog(uint32_t now, const uint16_t adc[ADC_NUM_CHANNELS
         }
         if (s_link_state == LINK_NORMAL) {
             s_link_state = LINK_UART_LOST;
-            haptic_post_oled_show("Astept ESP32", "Mod local");
+            haptic_post_oled_show("Astept ESP32", "UART offline");
             haptic_post_buzzer_beep(2U, 200U, 100U);
         }
-        s_link_state = handle_uart_lost(s_link_state, now);
-#if LOCAL_ALERT_FALLBACK_ENABLED
-        haptic_led_set(((now % 200U) < 100U));  /* fast blink */
-#endif
+        s_link_state = handle_uart_lost(now);
         return;
     }
 
@@ -350,7 +308,6 @@ static void tick_link_watchdog(uint32_t now, const uint16_t adc[ADC_NUM_CHANNELS
         s_last_ack_time = now;
         if (s_link_state != LINK_NORMAL) {
             s_link_state = LINK_NORMAL;
-            alert_clear();
             haptic_led_set(false);
             if (s_adc_fault.active_mask != 0U) {
                 show_sensor_fault();
@@ -366,25 +323,12 @@ static void tick_link_watchdog(uint32_t now, const uint16_t adc[ADC_NUM_CHANNELS
     if ((s_link_state == LINK_NORMAL)
         && ((now - s_last_ack_time) >= LINK_TIMEOUT_MS)) {
         s_link_state = LINK_UART_LOST;
-#if LOCAL_ALERT_FALLBACK_ENABLED
-        haptic_post_oled_show("Link pierdut!", "Mod local");
+        haptic_post_oled_show("Link pierdut!", "Astept ESP32");
         haptic_post_buzzer_beep(2U, 200U, 100U);
-#else
-        alert_clear();
-        haptic_led_set(false);
-        if (s_adc_fault.active_mask != 0U) {
-            show_sensor_fault();
-        } else {
-            haptic_post_oled_show("GloveAssist", "Astept ESP32");
-        }
-#endif
     }
 
     if (s_link_state != LINK_NORMAL) {
-        s_link_state = handle_uart_lost(s_link_state, now);
-#if LOCAL_ALERT_FALLBACK_ENABLED
-        haptic_led_set(((now % 200U) < 100U));  /* fast blink */
-#endif
+        s_link_state = handle_uart_lost(now);
     }
 }
 
@@ -474,7 +418,6 @@ int main(void)
     adc_sensor_init();
     adc_sensor_fault_reset();
     haptic_init();
-    alert_init();
     boot_sequence();
     safety_watchdog_init();
 

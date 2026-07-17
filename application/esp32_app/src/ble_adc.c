@@ -17,6 +17,7 @@
 #include <zephyr/version.h>
 #include "frame_protocol.h"
 #include "gesture.h"
+#include "uart_stm32.h"
 #include "wifi_mqtt.h"
 
 #if KERNEL_VERSION_MAJOR >= 4
@@ -46,7 +47,7 @@ static struct bt_uuid_128 nus_tx_uuid = BT_UUID_INIT_128(
 
 static struct bt_conn *current_conn;
 static bool notify_enabled;
-static bool link_encrypted;
+static bool link_authenticated;
 static bool security_needed;
 static bool security_pause_started;
 static uint32_t next_security_request_ms;
@@ -122,6 +123,10 @@ static ssize_t rx_write(struct bt_conn *conn, const struct bt_gatt_attr *attr,
     ARG_UNUSED(attr);
     ARG_UNUSED(offset);
     ARG_UNUSED(flags);
+
+    if (!link_authenticated) {
+        return BT_GATT_ERR(BT_ATT_ERR_AUTHENTICATION);
+    }
 
     const uint8_t *data = (const uint8_t *)buf;
     uint16_t i0 = cmd_skip_ws(data, len, 0U);
@@ -227,19 +232,15 @@ BT_GATT_SERVICE_DEFINE(nus_svc,
     BT_GATT_PRIMARY_SERVICE(&nus_svc_uuid),
     BT_GATT_CHARACTERISTIC(&nus_tx_uuid.uuid,
                            BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
-                           BT_GATT_PERM_READ,
+                           BT_GATT_PERM_READ_AUTHEN,
                            tx_read, NULL, NULL),
-    /* CCC is only a subscription flag. Keep it writable before encryption so
-     * phone apps do not fail with "reconnect to subscribe". */
-    BT_GATT_CCC(ccc_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
-    /* RX writable without link-layer encryption: ESP32 RAM is too tight to
-     * run SMP + WiFi/TLS simultaneously without crashing.  Caregiver ACK
-     * is not safety-critical; the actual security is the UART AES+HMAC link
-     * between STM32 and ESP32.  If the phone OS auto-pairs, the bond is
-     * stored and future reconnects re-encrypt transparently. */
+    /* CCC and RX require authenticated link-layer encryption (MITM). The
+     * passkey is displayed on the STM32 OLED over the secure UART channel. */
+    BT_GATT_CCC(ccc_changed,
+                BT_GATT_PERM_READ_AUTHEN | BT_GATT_PERM_WRITE_AUTHEN),
     BT_GATT_CHARACTERISTIC(&nus_rx_uuid.uuid,
                            BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
-                           BT_GATT_PERM_WRITE,
+                           BT_GATT_PERM_WRITE_AUTHEN,
                            NULL, rx_write, NULL),
 );
 
@@ -247,7 +248,8 @@ static int notify_text(const char *text, size_t len)
 {
     remember_tx_text(text, len);
 
-    if ((current_conn == NULL) || !notify_enabled || (text == NULL)) {
+    if ((current_conn == NULL) || !notify_enabled || (text == NULL)
+        || !link_authenticated) {
         return -ENOTCONN;
     }
 
@@ -272,17 +274,15 @@ static void connected(struct bt_conn *conn, uint8_t err)
     notify_enabled = false;
     s_welcome_retries = 0U;
     s_next_welcome_ms = 0U;
-    link_encrypted = false;
+    link_authenticated = false;
     security_needed = true;
     /*
-     * Immediately disconnect WiFi so BLE Secure Connections (P-256 ECC) has
-     * enough heap to complete pairing.  ESP32 cannot run SC + WiFi/TLS
-     * simultaneously without exhausting the shared heap → panic reset.
-     * wifi_mqtt_reconnect_after_ble_pairing() re-enables WiFi once SMP
-     * finishes (called from security_changed and disconnected).
+     * Pause new MQTT/TLS connection attempts before requesting BLE security.
+     * WiFi normally remains associated; avoiding a concurrent TLS handshake
+     * leaves RAM/stack headroom for the SMP procedure on ESP32.
      */
     wifi_mqtt_disconnect_for_ble_pairing();
-    security_pause_started = true;   /* WiFi already paused; skip ble_adc_process duplicate */
+    security_pause_started = true;   /* MQTT/TLS already paused; skip duplicate request */
     next_security_request_ms = k_uptime_get_32() + BLE_SECURITY_DELAY_MS
                                + BLE_SECURITY_PAUSE_SETTLE_MS;
     (void)k_work_cancel_delayable(&s_adv_retry_work);
@@ -302,12 +302,12 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
     notify_enabled = false;
     s_welcome_retries = 0U;
     s_next_welcome_ms = 0U;
-    link_encrypted = false;
+    link_authenticated = false;
     security_needed = false;
     security_pause_started = false;
     next_security_request_ms = 0U;
 
-    /* Restore WiFi if it was disconnected for BLE pairing. */
+    /* Resume MQTT/TLS attempts after BLE pairing or disconnect cleanup. */
     wifi_mqtt_reconnect_after_ble_pairing();
 
     /* Restart outside the stack callback. On ESP32+WiFi, immediate restart can
@@ -315,44 +315,83 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
     (void)k_work_reschedule(&s_adv_retry_work, K_MSEC(500));
 }
 
+static bool security_error_requires_repair(enum bt_security_err err)
+{
+    return (err == BT_SECURITY_ERR_PIN_OR_KEY_MISSING)
+           || (err == BT_SECURITY_ERR_AUTH_REQUIREMENT)
+           || (err == BT_SECURITY_ERR_AUTH_FAIL)
+           || (err == BT_SECURITY_ERR_KEY_REJECTED);
+}
+
 static void security_changed(struct bt_conn *conn, bt_security_t level,
                              enum bt_security_err err)
 {
     if (err != BT_SECURITY_ERR_SUCCESS) {
-        link_encrypted = false;
+        link_authenticated = false;
         security_needed = true;
         security_pause_started = false;
 
-        if (err == BT_SECURITY_ERR_PIN_OR_KEY_MISSING) {
+        if (security_error_requires_repair(err)) {
             /*
-             * Phone has a cached LTK from a previous session but ESP32's NVS
-             * was cleared (e.g. firmware flash with --erase).  Clear the
-             * stale bond on our side and disconnect so the phone reconnects
-             * and triggers a fresh SMP Just Works pairing.
+             * A stale or unauthenticated bond cannot satisfy L3/MITM. Clear
+             * local keys and disconnect so the phone can start a fresh
+             * passkey pairing flow. The user may also need "Forget device".
              */
             LOG_WRN("BLE stale key: phone LTK not found locally — clearing bond");
-            (void)bt_unpair(BT_ID_DEFAULT, bt_conn_get_dst(conn));            wifi_mqtt_reconnect_after_ble_pairing();            (void)bt_conn_disconnect(conn, BT_HCI_ERR_UNSPECIFIED);
+            (void)bt_unpair(BT_ID_DEFAULT, bt_conn_get_dst(conn));
+            uart_stm32_send_oled_text("REPAIR");
+            wifi_mqtt_reconnect_after_ble_pairing();
+            (void)bt_conn_disconnect(conn, BT_HCI_ERR_UNSPECIFIED);
             return;
         }
 
         next_security_request_ms = k_uptime_get_32() + 5000U;
         wifi_mqtt_reconnect_after_ble_pairing();
-        LOG_WRN("BLE security failed (level %d, err %d/%s) - link not encrypted",
+        LOG_WRN("BLE security failed (level %d, err %d/%s) - link not authenticated",
                 (int)level, (int)err, bt_security_err_to_str(err));
         return;
     }
-    link_encrypted = (level >= BT_SECURITY_L2);
-    security_needed = !link_encrypted;
+    link_authenticated = (level >= BT_SECURITY_L3);
+    security_needed = !link_authenticated;
     security_pause_started = false;
-    /* Pairing complete — allow WiFi to reconnect. */
-    wifi_mqtt_reconnect_after_ble_pairing();
-    LOG_INF("BLE link encrypted (security level %d)", (int)level);
+
+    if (link_authenticated) {
+        uart_stm32_send_oled_text("PAIRED");
+        wifi_mqtt_reconnect_after_ble_pairing();
+        LOG_INF("BLE link authenticated with MITM (security level %d)",
+                (int)level);
+        return;
+    }
+
+    next_security_request_ms = k_uptime_get_32() + 1000U;
+    LOG_WRN("BLE security level %d below L3 - retrying MITM request",
+            (int)level);
+}
+
+static void auth_passkey_display(struct bt_conn *conn, unsigned int passkey)
+{
+    char code[7];
+
+    ARG_UNUSED(conn);
+
+    (void)snprintf(code, sizeof(code), "%06u", passkey);
+    uart_stm32_send_oled_text(code);
+    LOG_INF("BLE passkey displayed on STM32 OLED");
+}
+
+static void auth_cancel(struct bt_conn *conn)
+{
+    ARG_UNUSED(conn);
+
+    uart_stm32_send_oled_text("CANCEL");
+    LOG_INF("BLE pairing cancelled");
 }
 
 static void pairing_complete(struct bt_conn *conn, bool bonded)
 {
     ARG_UNUSED(conn);
 
+    uart_stm32_send_oled_text("PAIRED");
     LOG_INF("BLE pairing complete (%s)", bonded ? "bonded" : "non-bonded");
 }
 
@@ -360,12 +399,19 @@ static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
 {
     LOG_WRN("BLE pairing failed: %d/%s", (int)reason,
             bt_security_err_to_str(reason));
+    uart_stm32_send_oled_text("PAIRNO");
     /*
      * Remove any partial or stale bond so the next connection attempt starts
      * a fresh SMP exchange instead of cycling on a mismatched LTK.
      */
     (void)bt_unpair(BT_ID_DEFAULT, bt_conn_get_dst(conn));
 }
+
+static struct bt_conn_auth_cb auth_cb = {
+    .passkey_display = auth_passkey_display,
+    .passkey_entry = NULL,
+    .cancel = auth_cancel,
+};
 
 static struct bt_conn_auth_info_cb auth_info_cb = {
     .pairing_complete = pairing_complete,
@@ -400,6 +446,11 @@ int ble_adc_init(void)
      */
     (void)settings_subsys_init();
     (void)settings_load_subtree("bt");
+
+    err = bt_conn_auth_cb_register(&auth_cb);
+    if (err != 0) {
+        LOG_WRN("BLE auth callback register failed: %d", err);
+    }
 
     err = bt_conn_auth_info_cb_register(&auth_info_cb);
     if (err != 0) {
@@ -436,7 +487,7 @@ void ble_adc_process(void)
         }
     }
 
-    if ((current_conn == NULL) || link_encrypted || !security_needed) {
+    if ((current_conn == NULL) || link_authenticated || !security_needed) {
         return;
     }
 
@@ -454,9 +505,9 @@ void ble_adc_process(void)
         return;
     }
 
-    err = bt_conn_set_security(current_conn, BT_SECURITY_L2);
+    err = bt_conn_set_security(current_conn, BT_SECURITY_L3);
     if (err == 0) {
-        LOG_INF("BLE security requested");
+        LOG_INF("BLE MITM security requested");
         next_security_request_ms = now + 5000U;
         return;
     }
@@ -541,9 +592,8 @@ int ble_adc_send_gesture(gesture_id_t gesture, const uint16_t adc[4])
         return -ENOTCONN;
     }
 
-    /* Format: "G:1 FIST\n" - ID + name, max 14 bytes, sub limita MTU 20. */
-    len = snprintf(buf, sizeof(buf), "G:%u %s\n",
-                   (unsigned)gesture, gesture_name(gesture));
+    /* Phone-facing payload: gesture name only, kept below the default ATT MTU. */
+    len = snprintf(buf, sizeof(buf), "%s\n", gesture_name(gesture));
     if ((len <= 0) || (len >= (int)sizeof(buf))) {
         return -EINVAL;
     }

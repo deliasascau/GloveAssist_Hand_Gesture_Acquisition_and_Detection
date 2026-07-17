@@ -113,6 +113,7 @@ static const sec_tag_t s_tls_sec_tags[] = {
 #define MQTT_PROCESS_MS      250U
 #define CONNECT_RETRY_MS     5000U   /* retry MQTT connect every 5 s */
 #define MQTT_CONNACK_TIMEOUT_MS 10000U
+#define MQTT_QOS1_ACK_TIMEOUT_MS 5000U
 #define SNTP_SERVER          "pool.ntp.org"
 #define SNTP_TIMEOUT_MS      5000U
 #define SNTP_RETRY_MS        30000U
@@ -177,6 +178,12 @@ static struct sockaddr_storage    s_broker_addr;
 static bool                       s_broker_addr_resolved;  /* cache DNS across retries */
 static bool                       s_mqtt_connected;
 static bool                       s_mqtt_connecting;
+static bool                       s_publish_inflight;
+static uint16_t                   s_publish_inflight_id;
+static uint32_t                   s_publish_inflight_ts;
+static const char                *s_publish_inflight_topic;
+static char                       s_publish_inflight_payload[MQTT_STATUS_MAX];
+static uint16_t                   s_next_message_id = 1U;
 /* WiFi reconnect exponential backoff: 10s → 20s → 40s → 60s (max).
  * Prevents AP flood-protection from blocking the ESP32 MAC after
  * multiple rapid failed WPA2 association attempts. */
@@ -203,7 +210,7 @@ static volatile bool              s_cloud_pause_requested;
 static uint32_t                   s_cloud_pause_request_ms;
 static uint32_t                   s_cloud_pause_until;
 /* Set by wifi_mqtt_reconnect_after_ble_pairing() from a BLE callback to cancel
- * the BLE-pairing WiFi-disconnect pause early from the MQTT thread. */
+ * the BLE-pairing MQTT/TLS new-connect pause early from the MQTT thread. */
 static volatile bool              s_ble_pairing_done;
 
 static void init_client_id(struct net_if *iface)
@@ -275,6 +282,26 @@ static int enqueue_publish(const struct mqtt_publish_msg *msg)
     }
 
     return rc;
+}
+
+static uint16_t next_mqtt_message_id(void)
+{
+    uint16_t id = s_next_message_id++;
+
+    if (s_next_message_id == 0U) {
+        s_next_message_id = 1U;
+    }
+
+    return (id == 0U) ? 1U : id;
+}
+
+static void clear_inflight_publish(void)
+{
+    s_publish_inflight = false;
+    s_publish_inflight_id = 0U;
+    s_publish_inflight_ts = 0U;
+    s_publish_inflight_topic = NULL;
+    s_publish_inflight_payload[0] = '\0';
 }
 
 static void wifi_evt_handler(struct net_mgmt_event_callback *cb,
@@ -549,7 +576,14 @@ static void mqtt_evt_handler(struct mqtt_client *client,
         break;
 
     case MQTT_EVT_PUBACK:
-        /* QoS 1 publish acknowledged - not used (QoS 0) */
+        if (s_publish_inflight
+            && (evt->param.puback.message_id == s_publish_inflight_id)) {
+            LOG_INF("MQTT puback id=%u", s_publish_inflight_id);
+            clear_inflight_publish();
+        } else {
+            LOG_WRN("Unexpected MQTT puback id=%u",
+                    evt->param.puback.message_id);
+        }
         break;
 
     default:
@@ -777,7 +811,8 @@ static int do_wifi_connect(void)
 
 /* ── Internal: publish helper ───────────────────────────────────────── */
 
-static int do_publish(const char *topic, const char *payload_str)
+static int do_publish(const char *topic, const char *payload_str,
+                      uint16_t message_id, bool dup)
 {
     if (!s_mqtt_connected) {
         return -ENOTCONN;
@@ -790,50 +825,85 @@ static int do_publish(const char *topic, const char *payload_str)
                     .utf8 = (const uint8_t *)topic,
                     .size = strlen(topic),
                 },
-                .qos = MQTT_QOS_0_AT_MOST_ONCE,
+                .qos = MQTT_QOS_1_AT_LEAST_ONCE,
             },
             .payload = {
                 .data = (uint8_t *)payload_str,
                 .len  = strlen(payload_str),
             },
         },
-        .message_id  = 0U,
-        .dup_flag    = 0U,
+        .message_id  = message_id,
+        .dup_flag    = dup ? 1U : 0U,
         .retain_flag = 0U,
     };
 
     int rc = mqtt_publish(&s_client, &p);
     if (rc == 0) {
-        LOG_INF("MQTT pub ok: %s <- %s", topic, payload_str);
+        LOG_INF("MQTT pub qos1%s id=%u: %s <- %s",
+                dup ? " retry" : "", message_id, topic, payload_str);
     } else {
-        LOG_WRN("MQTT pub fail: %s rc=%d", topic, rc);
+        LOG_WRN("MQTT pub fail id=%u: %s rc=%d", message_id, topic, rc);
     }
 
     return rc;
 }
 
+static bool prepare_publish_payload(const struct mqtt_publish_msg *msg,
+                                    const char **topic,
+                                    char payload[MQTT_STATUS_MAX])
+{
+    switch (msg->kind) {
+    case MQTT_PUBLISH_GESTURE:
+        *topic = TOPIC_GESTURE;
+        (void)snprintf(payload, MQTT_STATUS_MAX, "%u",
+                       (unsigned)msg->gesture);
+        return true;
+    case MQTT_PUBLISH_STATUS:
+        *topic = TOPIC_STATUS;
+        (void)snprintf(payload, MQTT_STATUS_MAX, "%s", msg->status);
+        return true;
+    default:
+        return false;
+    }
+}
+
 static void publish_one_queued_msg(void)
 {
     struct mqtt_publish_msg msg;
+    uint32_t now = k_uptime_get_32();
+    int rc;
+
+    if (s_publish_inflight) {
+        if ((now - s_publish_inflight_ts) < MQTT_QOS1_ACK_TIMEOUT_MS) {
+            return;
+        }
+
+        LOG_WRN("MQTT puback timeout id=%u - retrying",
+                s_publish_inflight_id);
+        rc = do_publish(s_publish_inflight_topic,
+                        s_publish_inflight_payload,
+                        s_publish_inflight_id, true);
+        s_publish_inflight_ts = now;
+        ARG_UNUSED(rc);
+        return;
+    }
 
     if (k_msgq_get(&s_publish_q, &msg, K_NO_WAIT) != 0) {
         return;
     }
 
-    switch (msg.kind) {
-    case MQTT_PUBLISH_GESTURE:
-        {
-            char buf[4];
-            (void)snprintf(buf, sizeof(buf), "%u", (unsigned)msg.gesture);
-            (void)do_publish(TOPIC_GESTURE, buf);
-        }
-        break;
-    case MQTT_PUBLISH_STATUS:
-        (void)do_publish(TOPIC_STATUS, msg.status);
-        break;
-    default:
-        break;
+    if (!prepare_publish_payload(&msg, &s_publish_inflight_topic,
+                                 s_publish_inflight_payload)) {
+        return;
     }
+
+    s_publish_inflight = true;
+    s_publish_inflight_id = next_mqtt_message_id();
+    s_publish_inflight_ts = now;
+
+    rc = do_publish(s_publish_inflight_topic, s_publish_inflight_payload,
+                    s_publish_inflight_id, false);
+    ARG_UNUSED(rc);
 }
 
 static void mqtt_thread_main(void *p1, void *p2, void *p3)
@@ -963,9 +1033,9 @@ void wifi_mqtt_process(void)
     }
 
     /* BLE pairing finished (success or failure): cancel the pause early so
-     * WiFi/MQTT can reconnect without waiting for the full 60-second window.
+     * MQTT/TLS can reconnect without waiting for the full pause window.
      * MUST be checked BEFORE the early-return below, otherwise the flag is
-     * never seen while the pause is active and WiFi waits the full 60 s. */
+     * never seen while the pause is active. */
     if (s_ble_pairing_done) {
         s_ble_pairing_done = false;
         s_cloud_pause_until = 0U;
@@ -1104,7 +1174,7 @@ void wifi_mqtt_reconnect_after_ble_pairing(void)
     if (!s_cloud_ready) {
         return;
     }
-    /* Signal the MQTT thread (volatile flag — safe from any callback). */
+    /* Signal the MQTT thread to cancel the BLE-pairing pause early. */
     s_ble_pairing_done = true;
 }
 

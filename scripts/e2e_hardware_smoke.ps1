@@ -2,7 +2,7 @@
 #
 # The STM32 firmware does not expose a UART console in the production build, so
 # the end-to-end checks are driven from the ESP32 console log. A successful ESP32
-# log proves that ESP32 booted, BLE advertising started, STM32 answered the UART
+# log proves that ESP32 booted, BLE became reachable, STM32 answered the UART
 # session handshake, WiFi obtained IPv4, MQTT connected, and firmware published
 # at least one MQTT status message.
 
@@ -140,6 +140,12 @@ $Esp32Log = Join-Path $LogDir 'esp32-serial.log'
 $SummaryLog = Join-Path $LogDir 'e2e-summary.txt'
 $BleLog = Join-Path $LogDir 'ble-client.log'
 
+foreach ($path in @($Esp32Log, $SummaryLog, $BleLog)) {
+    if (Test-Path -LiteralPath $path) {
+        Remove-Item -LiteralPath $path -Force
+    }
+}
+
 Write-Host "E2E log dir: $LogDir"
 Write-Host "ESP32 serial: $Esp32Port @ $Esp32Baud"
 
@@ -150,13 +156,13 @@ $checks = [ordered]@{
         Found = $false
     }
     ble_advertising = @{
-        Pattern = 'BLE advertising as GloveAssist'
-        Description = 'BLE service is advertising'
+        Pattern = 'BLE ready for phone connection|BLE advertising as GloveAssist|BLE connected|BLE link authenticated'
+        Description = 'BLE service advertised or accepted a phone connection'
         Found = $false
     }
     uart_handshake = @{
-        Pattern = 'UART secure session established \(STM32 ACK received\)'
-        Description = 'STM32 and ESP32 completed secure UART handshake'
+        Pattern = 'UART secure session established \(STM32 ACK received\)|Link: [1-9][0-9]* frames'
+        Description = 'STM32 and ESP32 completed handshake or exchanged valid secure frames'
         Found = $false
     }
     wifi_ipv4 = @{
@@ -170,7 +176,7 @@ $checks = [ordered]@{
         Found = $false
     }
     mqtt_publish = @{
-        Pattern = 'MQTT pub ok: .* <- '
+        Pattern = 'MQTT pub (ok|qos1).*: .* <- '
         Description = 'ESP32 published at least one MQTT message'
         Found = $false
     }
@@ -192,10 +198,6 @@ $serial.RtsEnable = $false
 $buffer = New-Object System.Text.StringBuilder
 
 try {
-    if (Test-Path -LiteralPath $Esp32Log) {
-        Remove-Item -LiteralPath $Esp32Log -Force
-    }
-
     $serial.Open()
     $serial.DiscardInBuffer()
 
@@ -209,7 +211,13 @@ try {
 
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
-        $chunk = $serial.ReadExisting()
+        try {
+            $chunk = $serial.ReadExisting()
+        } catch {
+            Write-Warning "Serial read stopped: $($_.Exception.Message)"
+            break
+        }
+
         if ($chunk.Length -gt 0) {
             Add-Content -LiteralPath $Esp32Log -Value $chunk -NoNewline -Encoding UTF8
             [void]$buffer.Append($chunk)

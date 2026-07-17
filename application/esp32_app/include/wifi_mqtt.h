@@ -3,7 +3,7 @@
  *
  * Enabled in the default ESP32 build with CONFIG_WIFI and CONFIG_MQTT_LIB.
  *
- * MQTT topics (QoS 0):
+ * MQTT topics (QoS 1, at least once):
  *   <user>/feeds/glove.gesture  <- gesture id (single digit ASCII, e.g. "6")
  *   <user>/feeds/glove.status   <- gesture name string (e.g. "WATER")
  *
@@ -73,8 +73,8 @@ void wifi_mqtt_pause_for_ble_security(uint32_t pause_ms);
 void wifi_mqtt_disconnect_for_ble_pairing(void);
 
 /**
- * @brief Allow WiFi to reconnect after BLE pairing is complete (success or
- * failure). Safe to call from any BLE callback.
+ * @brief Allow MQTT/TLS connection attempts to resume after BLE pairing is
+ * complete (success or failure). WiFi normally remains associated.
  */
 void wifi_mqtt_reconnect_after_ble_pairing(void);
 

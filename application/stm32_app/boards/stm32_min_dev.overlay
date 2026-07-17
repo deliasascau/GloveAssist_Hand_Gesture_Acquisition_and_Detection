@@ -140,8 +140,6 @@
 		watchdog0 = &iwdg;
 		pwm-buzz = &buzzer_pwm;
 		pwm-mot = &motor_pwm;  /* must point to pwm consumer, not controller */
-		alert-out = &alert_out_gpio;  /* PB0 -> ESP32 GPIO18 */
-		alert-in  = &alert_in_gpio;   /* PB1 <- ESP32 GPIO19 */
 	};
 
 	leds {
@@ -168,22 +166,6 @@
 		};
 	};
 
-	/* Emergency GPIO backup channel (UART fallback) */
-	alert_gpios {
-		compatible = "gpio-leds";
-
-		/* PB0: ALERT output -> ESP32 GPIO18 */
-		alert_out_gpio: alert_out_0 {
-			gpios = <&gpiob 0 GPIO_ACTIVE_HIGH>;
-			label = "Alert OUT PB0";
-		};
-
-		/* PB1: ACK input <- ESP32 GPIO19 */
-		alert_in_gpio: alert_in_0 {
-			gpios = <&gpiob 1 GPIO_ACTIVE_HIGH>;
-			label = "Alert ACK IN PB1";
-		};
-	};
 };
 
 /*
